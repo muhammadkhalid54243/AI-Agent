@@ -1,21 +1,21 @@
 import sys
 
 from agent.chatbot import Chatbot
-from agent.config import Config
-from agent.llm_client import GroqClient
+from agent.llms.groq.config import GroqConfig
+from agent.llms.groq.llm import GroqLLM
 
 
 def main():
-    config = Config()
+    config = GroqConfig()
     try:
         config.validate()
     except ValueError as error:
         sys.exit(str(error))
 
-    llm_client = GroqClient(api_key=config.groq_api_key, model=config.model)
-    chatbot = Chatbot(llm_client)
+    llm = GroqLLM(config)
+    chatbot = Chatbot(llm)
 
-    reply = chatbot.ask("Hello, who are you?")
+    reply = chatbot.ask("what is science?")
     print(reply)
 
 
