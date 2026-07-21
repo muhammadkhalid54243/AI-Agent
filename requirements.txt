@@ -1,2 +1,6 @@
 groq
+anthropic
+openroute
+openai
+google-genai
 python-dotenv
