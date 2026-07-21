@@ -1,12 +1,15 @@
-from groq import Groq
+from openai import OpenAI
 
 from agent.llms.base import BaseLLM
 
 
-class GroqLLM(BaseLLM):
+class OpenrouteLLM(BaseLLM):
 
     def __init__(self, config):
-        self._client = Groq(api_key=config.api_key)
+        self._client = OpenAI(
+            api_key=config.api_key,
+            base_url="https://openrouter.ai/api/v1",
+        )
         self._model = config.model
 
     def send(self, messages):
