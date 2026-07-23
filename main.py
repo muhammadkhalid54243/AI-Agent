@@ -34,7 +34,9 @@ def main():
 
     elif mode == "tools":
         chatbot = Chatbot(llm, tools=True)
-        print("\nNova has tools: get_weather, calculate. Type 'exit' to quit.\n")
+        print("\nNova has tools: get_weather, calculate, unit_convert, compare_cities, get_time.")
+        print("Try multi-step questions like: 'Compare weather in Lahore and London in Fahrenheit'")
+        print("Type 'exit' to quit.\n")
         while True:
             user_input = input("You: ")
             if user_input.lower() in ["exit", "quit"]:
