@@ -10,11 +10,11 @@
 
 ## Current position
 
-- **Current milestone:** 4 — First tool (function calling)
+- **Current milestone:** 5 — Multi-tool agent + agentic loop
 - **Theory level:** strong across the map (verified via concept tests). Reinforce **MCP** (M7)
   and **evaluation** (M9) while building them.
-- **Implementation level:** M0–M3 complete. Streaming chat with 5-provider abstraction layer.
-- **Next action:** Milestone 4 — give the bot a tool and implement the request→execute→return cycle.
+- **Implementation level:** M0–M4 complete. Tool calling with 2 tools across 5 providers.
+- **Next action:** Milestone 5 — multi-tool agent with ReAct loop, hard iteration cap, stop condition.
 
 ---
 
@@ -26,7 +26,7 @@
 | 1 | Multi-turn chatbot with memory | 🟢 | 🟢 | 🟢 | ✅ |
 | 2 | System prompts & structured output | 🟢 | 🟢 | 🟢 | ✅ |
 | 3 | Streaming & provider abstraction | 🟢 | 🟢 | 🟢 | ✅ |
-| 4 | First tool (function calling) | 🟢 | ⬜ | ⬜ | ⬜ |
+| 4 | First tool (function calling) | 🟢 | 🟢 | 🟢 | ✅ |
 | 5 | Multi-tool agent + agentic loop | 🟢 | ⬜ | ⬜ | ⬜ |
 | 6 | RAG (embeddings + vector search) | 🟢 | ⬜ | ⬜ | ⬜ |
 | 7 | MCP integration | 🟡 | ⬜ | ⬜ | ⬜ *(theory to reinforce)* |
@@ -42,6 +42,19 @@
 ## Session log
 
 *(append newest at the top — one entry per session)*
+
+### Session 4 — 2026-07-23 — Milestone 4 complete
+- Built tool calling: `TOOL_DEFINITIONS` (JSON schema), `TOOL_REGISTRY` (name→function map),
+  `send_with_tools` on all 5 providers, `_ask_with_tools` loop in Chatbot with MAX_TOOL_ROUNDS=5.
+- Two tools: `get_weather` (stub) and `calculate` (safe eval with character whitelist).
+- Adapter differences: Groq/OpenAI/OpenRouter share `tool_calls` format, Anthropic uses
+  `tool_use` blocks with `_convert_tool`, Google uses `function_call` with `FunctionDeclaration`.
+- **Nailed:** concept — "untrusted decision engine vs secure runtime" framing, security
+  implications of letting LLM execute directly.
+- **Shaky:** mastery check round-trip trace was directionally correct but blurred the two
+  separate API calls into one flow. Corrected: model returns tool_call object (API call 1),
+  your code executes, sends result back as a message (API call 2), model forms final answer.
+- **Next:** Milestone 5 — multi-tool agent + agentic loop.
 
 ### Session 3 — 2026-07-21 — Milestone 3 complete
 - Built streaming support (`stream=True` flag, `_stream_and_collect` for typewriter UX).
