@@ -10,11 +10,11 @@
 
 ## Current position
 
-- **Current milestone:** 5 — Multi-tool agent + agentic loop
+- **Current milestone:** 6 — RAG (embeddings + vector search)
 - **Theory level:** strong across the map (verified via concept tests). Reinforce **MCP** (M7)
   and **evaluation** (M9) while building them.
-- **Implementation level:** M0–M4 complete. Tool calling with 2 tools across 5 providers.
-- **Next action:** Milestone 5 — multi-tool agent with ReAct loop, hard iteration cap, stop condition.
+- **Implementation level:** M0–M5 complete. Multi-tool agent with ReAct loop and 5 providers.
+- **Next action:** Milestone 6 — embed docs, vector search, retrieval-augmented generation.
 
 ---
 
@@ -27,7 +27,7 @@
 | 2 | System prompts & structured output | 🟢 | 🟢 | 🟢 | ✅ |
 | 3 | Streaming & provider abstraction | 🟢 | 🟢 | 🟢 | ✅ |
 | 4 | First tool (function calling) | 🟢 | 🟢 | 🟢 | ✅ |
-| 5 | Multi-tool agent + agentic loop | 🟢 | ⬜ | ⬜ | ⬜ |
+| 5 | Multi-tool agent + agentic loop | 🟢 | 🟢 | 🟢 | ✅ |
 | 6 | RAG (embeddings + vector search) | 🟢 | ⬜ | ⬜ | ⬜ |
 | 7 | MCP integration | 🟡 | ⬜ | ⬜ | ⬜ *(theory to reinforce)* |
 | 8 | Agent orchestration | 🟢 | ⬜ | ⬜ | ⬜ |
@@ -42,6 +42,18 @@
 ## Session log
 
 *(append newest at the top — one entry per session)*
+
+### Session 5 — 2026-07-23 — Milestones 4 & 5 complete
+- M4: Built tool calling — `send_with_tools` across all 5 providers, tool execution loop
+  in Chatbot. Concept: "untrusted decision engine vs secure runtime."
+- M5: Expanded to 5 tools (get_weather, calculate, unit_convert, compare_cities, get_time),
+  ReAct system prompt for step-by-step reasoning, model-driven tool chaining across rounds.
+  Tested: model chained 4 tools in 2 rounds to answer a multi-step question.
+- **Nailed:** M5 mastery — distinguished workflow (M4, code-driven) vs loop (M5, LLM-driven),
+  identified cost risk from autonomous tool selection + growing message history per round.
+- **Shaky:** M4 round-trip trace was directionally correct but initially blurred two API calls
+  into one (corrected).
+- **Next:** Milestone 6 — RAG.
 
 ### Session 4 — 2026-07-23 — Milestone 4 complete
 - Built tool calling: `TOOL_DEFINITIONS` (JSON schema), `TOOL_REGISTRY` (name→function map),

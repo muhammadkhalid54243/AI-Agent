@@ -1,0 +1,45 @@
+AI Agents: A Technical Overview
+
+An AI agent is a software system that uses a large language model (LLM) as its core reasoning engine to autonomously accomplish tasks. Unlike simple chatbots that only respond to messages, agents can take actions in the world through tools, make decisions, and work toward goals over multiple steps.
+
+The ReAct Pattern
+
+The most common agent architecture is ReAct (Reasoning + Acting). In each step, the agent: (1) Thinks about what it knows and what it needs to do next, (2) Acts by calling a tool or taking an action, (3) Observes the result, and (4) Decides whether to continue or stop. This loop repeats until the task is complete or a safety limit is reached.
+
+Tool Calling
+
+Tools give agents the ability to interact with external systems. The LLM never executes tools directly — it outputs a structured request specifying which tool to call and with what arguments. The host application (your code) executes the tool in a controlled runtime and returns the result to the LLM. This separation is critical for security: the LLM is an untrusted decision engine, while your code is the trusted execution layer.
+
+Common tool types include: API calls (weather, search, databases), file operations (read, write, list), calculations, code execution, and communication (email, messaging).
+
+Memory and Context
+
+LLMs have no built-in memory between calls. Every API call starts fresh with zero knowledge of previous interactions. "Memory" is an illusion created by the application layer: the developer maintains a conversation history and re-sends it with each new request. This means memory management is crucial — as conversations grow, they can exceed the model's context window (the maximum number of tokens it can process at once).
+
+Strategies for handling long conversations include: sliding window (drop oldest messages), summarization (compress older history), and retrieval-augmented generation (store memories externally and retrieve relevant ones).
+
+Retrieval-Augmented Generation (RAG)
+
+RAG grounds the model's responses in specific documents rather than relying solely on training data. The process: (1) Documents are split into chunks, (2) Each chunk is converted to a vector embedding — a list of numbers representing the text's meaning, (3) Embeddings are stored in a vector database, (4) When a user asks a question, the question is also embedded, (5) The most similar document chunks are retrieved using cosine similarity, (6) Retrieved chunks are injected into the prompt as context, (7) The model answers based on the provided context.
+
+Vector embeddings capture semantic meaning, so "automobile" and "car" would have similar vectors even though they share no characters. This makes vector search superior to keyword search for finding relevant information.
+
+Multi-Agent Orchestration
+
+For complex tasks, multiple specialized agents can work together. An orchestrator agent receives the main task and delegates subtasks to specialized agents (researcher, coder, reviewer, etc.). Each sub-agent has its own system prompt, tools, and expertise. The orchestrator synthesizes their results into a final output.
+
+However, multi-agent systems add complexity. A single agent with good tools often outperforms a poorly designed multi-agent system. Use multiple agents only when the task genuinely requires different expertise or parallel processing.
+
+Model Context Protocol (MCP)
+
+MCP is an open standard that defines how AI applications connect to external tools and data sources. Think of it as "USB-C for AI tools" — a universal plug standard. Before MCP, every tool integration required custom code for each model provider. With MCP, any MCP-compatible client can connect to any MCP server, and the server exposes tools, resources, and prompts through a standardized protocol.
+
+An MCP setup has three parts: the Host (the AI application), the Client (manages the connection), and the Server (provides tools/resources). The server advertises its capabilities, and the client can discover and use them without knowing the implementation details.
+
+Safety and Guardrails
+
+Autonomous agents need safety controls: (1) Iteration caps prevent infinite loops that burn API credits, (2) Permission gates require human approval for dangerous actions (delete, send, purchase), (3) Spend limits cap total API costs per session, (4) Scoped tools give agents only the minimum access they need, (5) Prompt injection defense — never trust text the model read as if it were an instruction from the user.
+
+Evaluation
+
+Evaluating agents requires checking both outcomes and trajectories. An agent might get the right answer through a broken process (luck), which should still count as a failure. Eval sets consist of test cases with known-good outcomes. LLM-as-judge can scale grading by having another model evaluate the agent's responses. Regression testing catches when prompt or model changes break previously working cases.

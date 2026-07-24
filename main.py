@@ -9,6 +9,8 @@ from agent.llms.factory import get_llm
 
 load_dotenv()
 
+DOCS_DIR = os.path.join(os.path.dirname(__file__), "docs")
+
 
 def main():
     provider = os.environ.get("LLM_PROVIDER", "groq")
@@ -19,9 +21,9 @@ def main():
         sys.exit(str(error))
 
     print(f"Provider: {provider}")
-    print("Modes:  'chat' = streaming  |  'tools' = with tool calling  |  'analyze' = JSON  |  'exit' = quit\n")
+    print("Modes:  'chat' | 'tools' | 'rag' | 'analyze' | 'exit'\n")
 
-    mode = input("Mode [chat/tools/analyze]: ").strip().lower()
+    mode = input("Mode [chat/tools/rag/analyze]: ").strip().lower()
 
     if mode == "analyze":
         chatbot = Chatbot(llm, tools=False)
@@ -37,6 +39,29 @@ def main():
         print("\nNova has tools: get_weather, calculate, unit_convert, compare_cities, get_time.")
         print("Try multi-step questions like: 'Compare weather in Lahore and London in Fahrenheit'")
         print("Type 'exit' to quit.\n")
+        while True:
+            user_input = input("You: ")
+            if user_input.lower() in ["exit", "quit"]:
+                print("Exiting...")
+                break
+            reply = chatbot.ask(user_input)
+            print(f"Nova: {reply}\n")
+
+    elif mode == "rag":
+        from agent.rag.vector_store import VectorStore
+        store = VectorStore()
+
+        print(f"\nLoading documents from {DOCS_DIR}...")
+        for filename in os.listdir(DOCS_DIR):
+            filepath = os.path.join(DOCS_DIR, filename)
+            if os.path.isfile(filepath):
+                with open(filepath, "r", encoding="utf-8") as f:
+                    text = f.read()
+                count = store.add_document(text, source=filename)
+                print(f"  Loaded {filename}: {count} chunks")
+
+        chatbot = Chatbot(llm, tools=False, vector_store=store)
+        print("\nRAG mode — ask questions about your documents. Type 'exit' to quit.\n")
         while True:
             user_input = input("You: ")
             if user_input.lower() in ["exit", "quit"]:
