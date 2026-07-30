@@ -10,11 +10,11 @@
 
 ## Current position
 
-- **Current milestone:** 6 — RAG (embeddings + vector search)
-- **Theory level:** strong across the map (verified via concept tests). Reinforce **MCP** (M7)
-  and **evaluation** (M9) while building them.
-- **Implementation level:** M0–M5 complete. Multi-tool agent with ReAct loop and 5 providers.
-- **Next action:** Milestone 6 — embed docs, vector search, retrieval-augmented generation.
+- **Current milestone:** 8 — Agent orchestration
+- **Theory level:** strong across the map. **MCP now cemented** (was weak) — verified via full
+  server/client/host build + mastery check. Remaining spot to reinforce: **evaluation** (M9).
+- **Implementation level:** M0–M7 complete. MCP client discovers + calls tools over stdio protocol.
+- **Next action:** Milestone 8 — orchestrator delegating to specialized sub-agents.
 
 ---
 
@@ -28,8 +28,8 @@
 | 3 | Streaming & provider abstraction | 🟢 | 🟢 | 🟢 | ✅ |
 | 4 | First tool (function calling) | 🟢 | 🟢 | 🟢 | ✅ |
 | 5 | Multi-tool agent + agentic loop | 🟢 | 🟢 | 🟢 | ✅ |
-| 6 | RAG (embeddings + vector search) | 🟢 | ⬜ | ⬜ | ⬜ |
-| 7 | MCP integration | 🟡 | ⬜ | ⬜ | ⬜ *(theory to reinforce)* |
+| 6 | RAG (embeddings + vector search) | 🟢 | 🟢 | 🟢 | ✅ |
+| 7 | MCP integration | 🟢 | 🟢 | 🟢 | ✅ *(theory spot now cemented)* |
 | 8 | Agent orchestration | 🟢 | ⬜ | ⬜ | ⬜ |
 | 9 | Evaluation harness | 🟡 | ⬜ | ⬜ | ⬜ *(theory to reinforce)* |
 | 10 | Safety & guardrails | 🟢 | ⬜ | ⬜ | ⬜ |
@@ -42,6 +42,36 @@
 ## Session log
 
 *(append newest at the top — one entry per session)*
+
+### Session 7 — 2026-07-28 — Milestone 7 complete (MCP theory spot cemented)
+- Built full MCP stack over stdio: server (`mcp_server/server.py`, FastMCP, 3 company-directory
+  tools), client (`agent/mcp/client.py` — discover + openai_tools schema adapter + call), host
+  (`mcp_demo.py` — async agentic loop using discovered tools).
+- Demonstrated runtime tool discovery + protocol-based execution. Contrast with M4/M5 hardwired
+  TOOL_REGISTRY made the "standard vs custom integration" point land.
+- Debugged: llama-3.1-8b-instant looped redundantly and hit the cap (good illustration of why
+  caps matter) → switched demo to llama-3.3-70b-versatile + firmer stop instruction. Clean answers.
+- **Nailed:** mastery check — strong explanation of client vs server vs config JSON roles.
+  Correction: mcp_demo.py is the HOST not config; our build has no config JSON (wiring hardcoded
+  in the `connect()` call) — a real client externalizes it to claude_desktop_config.json.
+- MCP was one of two flagged weak theory spots — now genuinely owned.
+- **Next:** Milestone 8 — agent orchestration.
+
+### Session 6 — 2026-07-28 — Milestone 6 complete
+- Built RAG pipeline: `chunker.py` (overlapping word chunks), `vector_store.py` (Google
+  `gemini-embedding-001` embeddings + in-memory cosine similarity search), `_ask_with_rag`
+  in Chatbot (retrieve top-3 → inject as context → grounded answer with source citation).
+- Sample doc: docs/ai_agents.txt. Tested: correctly answered "What is the ReAct pattern?"
+  from retrieved chunks with citation.
+- Debugged: old embedding model `text-embedding-004` deprecated → switched to
+  `gemini-embedding-001` (found via models.list()).
+- **Nailed:** mastery check — production-grade answer on fixed-K failure modes (knowledge
+  cutoff vs chunk poisoning) with fixes: parent-child retrieval, agentic multi-hop, two-stage
+  retrieval + rerankers (bge/cohere), corrective RAG. Exceeded the bar.
+- Side task: purged large `docs/SHR/` PDFs (128MB/110MB, over GitHub's 100MB limit) from
+  both HRCP-SHR-RAG and class-based-AI-Agent history via git-filter-repo. Backup tags created.
+  class-based-AI-Agent now needs a force-push (history rewritten); not yet pushed.
+- **Next:** Milestone 7 — MCP integration.
 
 ### Session 5 — 2026-07-23 — Milestones 4 & 5 complete
 - M4: Built tool calling — `send_with_tools` across all 5 providers, tool execution loop
