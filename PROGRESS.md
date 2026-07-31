@@ -10,11 +10,11 @@
 
 ## Current position
 
-- **Current milestone:** 8 — Agent orchestration
-- **Theory level:** strong across the map. **MCP now cemented** (was weak) — verified via full
-  server/client/host build + mastery check. Remaining spot to reinforce: **evaluation** (M9).
-- **Implementation level:** M0–M7 complete. MCP client discovers + calls tools over stdio protocol.
-- **Next action:** Milestone 8 — orchestrator delegating to specialized sub-agents.
+- **Current milestone:** 9 — Evaluation harness
+- **Theory level:** strong across the map. MCP cemented. Remaining spot to reinforce:
+  **evaluation** (M9) — building it next will cement it.
+- **Implementation level:** M0–M8 complete. Orchestrator-worker pattern with 3 sub-agents.
+- **Next action:** Milestone 9 — eval set + runner scoring outcome AND trajectory (the 2nd weak spot).
 
 ---
 
@@ -30,7 +30,7 @@
 | 5 | Multi-tool agent + agentic loop | 🟢 | 🟢 | 🟢 | ✅ |
 | 6 | RAG (embeddings + vector search) | 🟢 | 🟢 | 🟢 | ✅ |
 | 7 | MCP integration | 🟢 | 🟢 | 🟢 | ✅ *(theory spot now cemented)* |
-| 8 | Agent orchestration | 🟢 | ⬜ | ⬜ | ⬜ |
+| 8 | Agent orchestration | 🟢 | 🟢 | 🟢 | ✅ |
 | 9 | Evaluation harness | 🟡 | ⬜ | ⬜ | ⬜ *(theory to reinforce)* |
 | 10 | Safety & guardrails | 🟢 | ⬜ | ⬜ | ⬜ |
 | 11 | Production capstone | 🟡 | ⬜ | ⬜ | ⬜ |
@@ -42,6 +42,18 @@
 ## Session log
 
 *(append newest at the top — one entry per session)*
+
+### Session 8 — 2026-07-28 — Milestone 8 complete
+- Built orchestrator-worker pattern: `SubAgent` (role + system prompt, stateless/isolated),
+  `Orchestrator` (plan via JSON → delegate in sequence passing context → synthesize).
+  Team: researcher, writer, critic. Demo: `orchestrate_demo.py`.
+- Live teaching moment: on the test task the researcher misread "iteration caps" (drifted from
+  agentic-loop caps to AI-safety/AGI), and writer+critic built on the error — a textbook
+  demonstration of the error-propagation failure mode the learner predicted.
+- **Nailed:** mastery check answered up front — multi-agent hurts via error propagation
+  (early hallucination becomes downstream truth), cost multiplication; rule: known workflow →
+  code it / single agent, reserve orchestration for open-ended non-deterministic tasks.
+- **Next:** Milestone 9 — evaluation harness (2nd flagged weak theory spot).
 
 ### Session 7 — 2026-07-28 — Milestone 7 complete (MCP theory spot cemented)
 - Built full MCP stack over stdio: server (`mcp_server/server.py`, FastMCP, 3 company-directory
