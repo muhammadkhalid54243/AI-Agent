@@ -10,11 +10,11 @@
 
 ## Current position
 
-- **Current milestone:** 9 — Evaluation harness
-- **Theory level:** strong across the map. MCP cemented. Remaining spot to reinforce:
-  **evaluation** (M9) — building it next will cement it.
-- **Implementation level:** M0–M8 complete. Orchestrator-worker pattern with 3 sub-agents.
-- **Next action:** Milestone 9 — eval set + runner scoring outcome AND trajectory (the 2nd weak spot).
+- **Current milestone:** 10 — Safety & guardrails
+- **Theory level:** strong across the map. **Both flagged weak spots (MCP, evaluation) now
+  cemented** through building. No remaining theory gaps flagged.
+- **Implementation level:** M0–M9 complete. Eval harness scoring outcome + trajectory + LLM-judge.
+- **Next action:** Milestone 10 — human-in-the-loop gates, spend cap, prompt-injection defense.
 
 ---
 
@@ -31,7 +31,7 @@
 | 6 | RAG (embeddings + vector search) | 🟢 | 🟢 | 🟢 | ✅ |
 | 7 | MCP integration | 🟢 | 🟢 | 🟢 | ✅ *(theory spot now cemented)* |
 | 8 | Agent orchestration | 🟢 | 🟢 | 🟢 | ✅ |
-| 9 | Evaluation harness | 🟡 | ⬜ | ⬜ | ⬜ *(theory to reinforce)* |
+| 9 | Evaluation harness | 🟢 | 🟢 | 🟢 | ✅ *(theory spot now cemented)* |
 | 10 | Safety & guardrails | 🟢 | ⬜ | ⬜ | ⬜ |
 | 11 | Production capstone | 🟡 | ⬜ | ⬜ | ⬜ |
 
@@ -42,6 +42,19 @@
 ## Session log
 
 *(append newest at the top — one entry per session)*
+
+### Session 9 — 2026-07-28 — Milestone 9 complete (evaluation theory spot cemented)
+- Built eval harness: `dataset.py` (eval set with per-case judging: contains/trajectory/judge),
+  `runner.py` (instrumented agent returning answer + tool trajectory), `judge.py` (LLM-as-judge
+  with rubric → structured JSON score), `eval_demo.py` (two-axis scorecard). Live: 5/5 passed;
+  judge gave a genuine 4/5 critique on the open-ended case.
+- Proved the trajectory catch: a simulated lucky guess (right answer, empty trajectory) —
+  outcome-only grading PASSES it, outcome+trajectory FAILS it. That's the core M9 lesson.
+- **Nailed:** mastery — articulated outcome-vs-trajectory (right answer via broken path = luck,
+  not process; fails on next input), LLM-as-judge with rubric criteria (faithfulness, relevance,
+  completeness, usefulness) + trajectory metrics (goal completion, step efficiency).
+- Evaluation was the 2nd flagged weak theory spot — now genuinely owned. Both weak spots closed.
+- **Next:** Milestone 10 — safety & guardrails.
 
 ### Session 8 — 2026-07-28 — Milestone 8 complete
 - Built orchestrator-worker pattern: `SubAgent` (role + system prompt, stateless/isolated),
