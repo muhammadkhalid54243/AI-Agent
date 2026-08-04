@@ -71,6 +71,18 @@ def get_time(city: str) -> str:
     return json.dumps({"city": city, "local_time": local.strftime("%H:%M"), "utc_offset": offset})
 
 
+# ── DESTRUCTIVE tools (gated behind human approval — see agent/safety) ──
+
+def send_email(to: str, body: str) -> str:
+    """Stub — in production this would actually send an email. Side-effecting."""
+    return json.dumps({"status": "sent", "to": to, "body_preview": body[:60]})
+
+
+def delete_record(record_id: str) -> str:
+    """Stub — in production this would permanently delete a record. Irreversible."""
+    return json.dumps({"status": "deleted", "record_id": record_id})
+
+
 # ── Tool definitions (OpenAI format — adapters convert as needed) ──
 
 TOOL_DEFINITIONS = [
@@ -151,6 +163,35 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": "Send an email to a recipient. DESTRUCTIVE — has real-world side effects.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Recipient email address"},
+                    "body": {"type": "string", "description": "Email body text"},
+                },
+                "required": ["to", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_record",
+            "description": "Permanently delete a record by id. DESTRUCTIVE and irreversible.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "record_id": {"type": "string", "description": "The id of the record to delete"},
+                },
+                "required": ["record_id"],
+            },
+        },
+    },
 ]
 
 
@@ -160,4 +201,6 @@ TOOL_REGISTRY = {
     "unit_convert": unit_convert,
     "compare_cities": compare_cities,
     "get_time": get_time,
+    "send_email": send_email,
+    "delete_record": delete_record,
 }
