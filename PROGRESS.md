@@ -10,11 +10,15 @@
 
 ## Current position
 
-- **Current milestone:** 10 — Safety & guardrails
-- **Theory level:** strong across the map. **Both flagged weak spots (MCP, evaluation) now
-  cemented** through building. No remaining theory gaps flagged.
-- **Implementation level:** M0–M9 complete. Eval harness scoring outcome + trajectory + LLM-judge.
-- **Next action:** Milestone 10 — human-in-the-loop gates, spend cap, prompt-injection defense.
+- **Current milestone:** 🎉 ALL 11 COMPLETE — program finished.
+- **Theory level:** strong across the map. Both originally-weak spots (MCP, evaluation) cemented
+  through building.
+- **Implementation level:** M0–M11 all complete. Went from one raw LLM call to a deployable,
+  production-lite agentic system (safety + resilience + observability + HTTP API).
+- **Possible next directions:** real tools (replace stubs), swap in-memory vector store for a real
+  vector DB, add prompt caching for real providers, containerize/deploy the API, expand the eval set.
+- **Housekeeping:** two cleaned branches (HRCP-SHR-RAG, class-based-AI-Agent) still not pushed to
+  GitHub — class-based-AI-Agent needs a force-push (history rewritten to purge docs/SHR).
 
 ---
 
@@ -32,8 +36,8 @@
 | 7 | MCP integration | 🟢 | 🟢 | 🟢 | ✅ *(theory spot now cemented)* |
 | 8 | Agent orchestration | 🟢 | 🟢 | 🟢 | ✅ |
 | 9 | Evaluation harness | 🟢 | 🟢 | 🟢 | ✅ *(theory spot now cemented)* |
-| 10 | Safety & guardrails | 🟢 | ⬜ | ⬜ | ⬜ |
-| 11 | Production capstone | 🟡 | ⬜ | ⬜ | ⬜ |
+| 10 | Safety & guardrails | 🟢 | 🟢 | 🟢 | ✅ *(mastery after 1 correction)* |
+| 11 | Production capstone | 🟢 | 🟢 | 🟢 | ✅ |
 
 *🟢 = demonstrated · 🟡 = partial / to reinforce · ⬜ = not yet*
 
@@ -42,6 +46,37 @@
 ## Session log
 
 *(append newest at the top — one entry per session)*
+
+### Session 11 — 2026-07-28 — Milestone 11 complete 🎉 PROGRAM FINISHED
+- Built production capstone integrating everything: `observability.py` (TrajectoryLogger — timed
+  structured events + summary), `resilient_llm.py` (retry w/ exponential backoff + provider
+  fallback), `production/agent.py` (ProductionAgent tying safety + resilience + logging),
+  `api.py` (starlette HTTP service: POST /chat, GET /health, agent built once at startup).
+- Demos: `capstone_demo.py` (full trace + staged fallback via FlakyLLM), API verified with
+  starlette TestClient (health, 400 validation, real /chat with trace).
+- Live: staged flaky primary → fell back to groq; retry logic ALSO salvaged a real transient
+  groq tool_use_failed error; send_email/delete_record blocked; full timed trajectory logged.
+- **Nailed mastery (after one nudge):** full operator trace of a request — cost grows per round
+  as history accumulates (call #2 pricier than #1), failure at each network boundary handled by
+  retry→fallback→AllProvidersFailed, safety via authorize_tool gate + spend cap, API-layer 400
+  validation. Also spotted unprompted that the agent lacked the MCP directory tool (tool_calls=0).
+- **Journey:** M0 (one raw Groq call, no memory/tools/loop) → M11 (deployable agentic system).
+  All three axes green on all 11 milestones. Both flagged weak theory spots closed by building.
+
+### Session 10 — 2026-07-28 — Milestone 10 complete
+- Built safety layer: `guardrails.py` (SpendTracker capped loop, DESTRUCTIVE_TOOLS set,
+  pluggable approver always_deny/console_approver), `safe_runner.py` (charges cap per round,
+  routes tools through authorize_tool, fences untrusted content as <untrusted_document>).
+  Added destructive stub tools send_email + delete_record. Demo: `safety_demo.py`.
+- All 3 defenses demonstrated live: (1) HITL gate blocked send_email, (2) spend cap halted a
+  10-round task at the limit, (3) indirect prompt injection in a poisoned doc IGNORED — agent
+  returned the real fact, no destructive tool executed.
+- **Mastery after correction:** initially attributed the safety guarantee to prompt-level
+  defenses (system prompt + XML fencing + round cap). Corrected: those are probabilistic; the
+  real guarantee is the code-level `authorize_tool` gate that prevents func(**args) from ever
+  running on a denied destructive call. Model DECISION vs code EXECUTION are separate layers;
+  safety lives in the execution layer. Re-check confirmed understanding locked in.
+- **Next:** Milestone 11 — production capstone (final).
 
 ### Session 9 — 2026-07-28 — Milestone 9 complete (evaluation theory spot cemented)
 - Built eval harness: `dataset.py` (eval set with per-case judging: contains/trajectory/judge),
