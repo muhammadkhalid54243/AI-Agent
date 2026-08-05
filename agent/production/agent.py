@@ -22,20 +22,24 @@ SYSTEM_PROMPT = (
 
 
 class ProductionAgent:
-    def __init__(self, resilient_llm: ResilientLLM, guardrails: Guardrails, max_rounds: int = 6):
+    def __init__(self, resilient_llm: ResilientLLM, guardrails: Guardrails,
+                 max_rounds: int = 6, memory=None):
         self._llm = resilient_llm
         self._guards = guardrails
         self._max_rounds = max_rounds
+        self._memory = memory  # optional ConversationMemory → multi-turn; None = stateless
 
     def run(self, user_message: str) -> dict:
         request_id = uuid.uuid4().hex[:8]
+        self._guards.start_request()  # fresh per-request spend budget
         log = TrajectoryLogger(request_id)
         log.log("request_received", message=user_message)
 
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ]
+        # Prepend prior turns from memory (if any), then this turn's user message.
+        prior = self._memory.history() if self._memory else []
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        messages += prior
+        messages.append({"role": "user", "content": user_message})
 
         answer = "(no answer)"
         status = "ok"
@@ -49,6 +53,11 @@ class ProductionAgent:
             status = "provider_failure"
             answer = "All model providers are currently unavailable. Please try again later."
             log.log("provider_failure", error=repr(e))
+
+        # Persist this turn (user + final answer) for the next request.
+        if self._memory is not None and status == "ok":
+            self._memory.add_user(user_message)
+            self._memory.add_assistant(answer)
 
         log.log("response_ready", status=status)
         return {

@@ -11,10 +11,18 @@ class SpendCapExceeded(Exception):
 
 
 class SpendTracker:
-    """A hard cap on model calls per session — a runaway loop can't burn unlimited money."""
+    """A hard cap on model calls per request — a runaway loop can't burn unlimited money.
+
+    The cap is per-request: reset() is called at the start of each agent run so a
+    long-lived agent (e.g. behind an HTTP server) doesn't exhaust its budget across
+    unrelated requests.
+    """
 
     def __init__(self, max_calls: int):
         self.max_calls = max_calls
+        self.calls = 0
+
+    def reset(self):
         self.calls = 0
 
     def charge(self):
@@ -52,6 +60,10 @@ class Guardrails:
     def __init__(self, max_calls=8, approver=always_deny):
         self.spend = SpendTracker(max_calls)
         self._approver = approver
+
+    def start_request(self):
+        """Reset the per-request spend budget. Call once at the start of each agent run."""
+        self.spend.reset()
 
     def before_model_call(self):
         """Call once per model round — enforces the spend cap."""
