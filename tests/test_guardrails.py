@@ -14,3 +14,10 @@ def test_guardrails_builds_approval_gate_for_named_tools():
 
 def test_guardrails_empty_by_default():
     assert guardrails() == []
+
+
+def test_resilience_builds_retry_middleware():
+    from langchain.agents.middleware import ModelRetryMiddleware
+    from framework.middleware import resilience
+    mw = resilience(max_retries=3)
+    assert any(isinstance(m, ModelRetryMiddleware) for m in mw)

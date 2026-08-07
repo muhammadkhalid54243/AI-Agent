@@ -10,14 +10,14 @@ pytestmark = pytest.mark.skipif(not os.environ.get("GROQ_API_KEY"), reason="need
 def _agent():
     from framework import Agent
     from framework.memory import checkpoint
-    from framework.middleware import guardrails
+    from framework.middleware import guardrails, resilience
     from framework.tools import delete_record
     return Agent(
         "groq:llama-3.3-70b-versatile",
         tools=[delete_record],
         system_prompt="Use delete_record when asked to delete something.",
         memory=checkpoint("memory"),
-        middleware=guardrails(require_approval=["delete_record"], model_call_limit=6),
+        middleware=guardrails(require_approval=["delete_record"], model_call_limit=6) + resilience(),
     )
 
 
