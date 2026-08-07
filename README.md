@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🤖 AI Agent
+# 🤖 Agent Framework
 
-**A production-lite agentic AI system — from a single LLM call to a deployable, safe, observable agent.**
+**A modular, LangGraph-based agent framework — compose exactly the capabilities you need.**
 
-Provider-agnostic · tool-using · memory-backed · guardrailed · fully evaluated.
+Provider-agnostic · memory · tools · RAG · MCP · orchestration · safety · eval · streaming UI
 
 </div>
 
@@ -12,186 +12,170 @@ Provider-agnostic · tool-using · memory-backed · guardrailed · fully evaluat
 
 ## What is this?
 
-A complete, from-scratch agentic AI framework built one milestone at a time — no framework magic, every layer written and understood. It starts at a raw LLM call and ends at an agent you can serve over HTTP, with the safety, resilience, and observability you'd actually want in production.
+A small framework built on **LangGraph 1.x**. One composable `Agent` sits at the center; every
+capability is an **opt-in module** you add as needed — nothing is mandatory except a model. It
+rides LangGraph's stable prebuilts (fewer deprecations) while keeping each capability behind a
+thin seam of its own.
 
-One canonical agent (`ProductionAgent`) sits at the center. Around it is a library of composable capabilities you can wire in as needed: memory, RAG, MCP, orchestration, structured output, and an evaluation harness that tests the real agent.
+```python
+from framework import Agent
+from framework.memory import checkpoint
+from framework.middleware import guardrails, resilience
+from framework.tools import get_weather, calculate
+from framework.rag import Retriever
+from framework.mcp import load_mcp_tools
 
-```bash
-uv run python api.py        # → open http://127.0.0.1:8001  (browser chat UI)
+agent = Agent(
+    "groq:llama-3.3-70b-versatile",
+    fallbacks=["openai:gpt-4o-mini"],                       # provider fallback
+    tools=[get_weather, calculate],
+    memory=checkpoint("memory"),                            # per-session via thread_id
+    middleware=guardrails(require_approval=["send_email"],  # human-in-the-loop gate
+                          model_call_limit=8)               # spend cap
+              + resilience(),                               # retry transient errors
+    system_prompt="You are Nova. Be concise.",
+)
+
+agent.add_tools([Retriever("docs/").as_tool()])             # RAG, opt-in
+agent.add_tools(load_mcp_tools({"dir": {...}}))             # MCP, opt-in
+
+print(agent.run("What's the weather in Lahore?", thread_id="user-1"))
+for token in agent.stream("Tell me a joke", thread_id="user-1"):
+    print(token, end="")
 ```
 
 ---
 
 ## ✨ Capabilities
 
-Every layer below is present in this branch as working code.
-
-| Layer | Capability | Where it lives |
-|-------|-----------|----------------|
-| 🧠 **Memory** | Multi-turn conversation history + sliding-window cap | `agent/memory/` |
-| 📐 **Structure** | Strict JSON output + Pydantic-validated extraction | `agent/structured/` |
-| 🔌 **Portability** | 5-provider abstraction (Groq · OpenAI · Anthropic · Google · OpenRouter) + streaming | `agent/llms/` |
-| 🛠️ **Action** | Multi-tool ReAct loop (think → act → observe → repeat) | `agent/production/agent.py`, `agent/tools.py` |
-| 📚 **Grounding** | RAG — chunk → embed → cosine search → augment | `agent/rag/` |
-| 🔗 **Standards** | MCP client — discovers & calls tools over the protocol | `agent/mcp/`, `mcp_server/` |
-| 🎭 **Coordination** | Orchestrator + specialist sub-agents (plan → delegate → synthesize) | `agent/orchestration/` |
-| 🎯 **Rigor** | Eval harness scoring **outcome *and* trajectory** + LLM-as-judge | `agent/eval/` |
-| 🛡️ **Safety** | Human-in-the-loop gates · per-request spend cap · prompt-injection defense | `agent/safety/` |
-| 🚀 **Production** | Retry + provider fallback · structured trajectory logging · HTTP API | `agent/production/`, `api.py` |
+| Capability | Module | Backed by |
+|-----------|--------|-----------|
+| 🔌 **Providers + fallback** | `framework.core` | `init_chat_model` + `.with_fallbacks()` |
+| 🧠 **Memory (per-session)** | `framework.memory` | checkpointer + `thread_id` |
+| 🛠️ **Tools + ReAct loop** | `framework.tools`, `core` | `create_agent` |
+| 🛡️ **Safety** (approval gate, spend cap) | `framework.middleware` | `HumanInTheLoop` + `ModelCallLimit` middleware |
+| ♻️ **Resilience** (retry/backoff) | `framework.middleware` | `ModelRetryMiddleware` |
+| 📐 **Structured output** | `framework.structured` | `with_structured_output` + Pydantic |
+| 🔭 **Observability** | `framework.observability` | callback tracer → `run_traced()` |
+| 📚 **RAG** | `framework.rag` | vector store + retriever tool |
+| 🔗 **MCP** | `framework.mcp` | `langchain-mcp-adapters` |
+| 🎭 **Orchestration** | `framework.orchestration` | sub-agents-as-tools + supervisor |
+| 🎯 **Evaluation** | `framework.eval` | outcome + trajectory + LLM-judge |
+| 🚀 **Serving + UI** | `framework.serve` | starlette + SSE streaming + browser chat |
 
 ---
 
 ## 🧭 Architecture
 
-A single agent loop. Everything else is a library it can compose.
-
 ```
-agent/
-├── llms/                  Provider abstraction — one interface, five backends
-│   ├── base.py              BaseLLM: send · stream · send_with_tools
-│   ├── factory.py           get_llm("groq" | "openai" | "anthropic" | "google" | "openroute")
-│   └── <provider>/          config.py (keys/model) + llm.py (the only SDK call site)
-├── memory/                Conversation history + sliding-window (FIFO) cap
-├── structured/            extract_json() + extract_model() (Pydantic-validated)
-├── tools.py               Tool schemas + registry (read-only tools + destructive stubs)
-├── safety/
-│   └── guardrails.py        Per-request spend cap + destructive-tool approval gate
-├── production/
-│   ├── agent.py             ★ ProductionAgent — THE agent loop
-│   ├── resilient_llm.py     Retry (exponential backoff) + provider fallback
-│   └── observability.py     TrajectoryLogger — timed, structured event log
-├── rag/                   chunker.py + vector_store.py (in-memory embeddings)
-├── mcp/                   client.py — connect, discover, call tools over MCP
-├── orchestration/         sub_agent.py + orchestrator.py
-└── eval/                  dataset.py + judge.py + runner.py (tests the real agent)
-
-api.py                     Deployable HTTP interface (browser UI + JSON API)
-mcp_server/server.py       Example MCP server (company directory)
-docs/                      Sample documents for the RAG pipeline
+framework/
+├── core/            Agent composer + provider/model resolution (fallbacks)
+├── memory/          checkpoint() — per-session memory keyed by thread_id
+├── tools/           built-in + destructive @tool functions
+├── middleware/      guardrails() (safety) + resilience() (retry)
+├── structured/      extract() — validated Pydantic output
+├── observability/   TrajectoryTracer — timed model/tool events
+├── rag/             Retriever(...).as_tool()
+├── mcp/             load_mcp_tools(config)
+├── orchestration/   subagent() + supervisor()
+├── eval/            dataset + judge + run_suite()
+└── serve/           app (HTTP + SSE) + browser UI
+serve.py             run the chat server
+examples/demo.py     see everything working
+mcp_server/          example MCP server (company directory)
+tests/               TDD suite (unit + key-gated live integration)
 ```
 
-**One request, end to end:** `POST /chat` → spend budget reset → ReAct loop (each model call retried & fallback-guarded, each tool call authorized by the safety gate) → every step logged → JSON response with the answer *and* its full trajectory.
-
----
-
-## 💡 Why it's built this way
-
-- **Provider-agnostic by design.** Every model sits behind one `send`/`stream`/`send_with_tools` interface. Swapping Groq → Claude → Gemini is a one-line `.env` change — no app code touched.
-- **One loop, not four.** A single canonical agent runs everything; the eval harness and the API drive that *same* code path, so tests exercise production behavior — not a parallel copy.
-- **Safety in code, not vibes.** Destructive actions are blocked by a deterministic gate in the execution layer. Even if the model is fooled by a prompt injection, a denied approval means the function is *never called*. The guarantee doesn't depend on the model behaving.
-- **Observable by default.** Every request returns a trajectory: model calls, tool calls, blocked calls, and total latency — so you can see exactly what the agent did and where the time and money went.
-- **Resilient at the network edge.** Transient failures retry with backoff; a dead provider falls back to the next. Callers never see the churn.
-- **Composable, not monolithic.** RAG, MCP, orchestration, memory, and structured output are independent modules. Use one, some, or all.
-
----
-
-## 🚦 Production readiness — an honest assessment
-
-This is **production-*lite*** — the architecture and control planes are real; the outermost integrations are demo-grade. Straight talk on what's ready and what isn't:
-
-| Area | Status | Notes |
-|------|:------:|-------|
-| Provider abstraction & fallback | ✅ Ready | Battle-tested pattern, 5 providers |
-| Safety gates & spend cap | ✅ Ready | Deterministic, per-request, verified |
-| Observability / trajectory logging | ✅ Ready | Structured events; ship to a log aggregator as-is |
-| Evaluation harness | ✅ Ready | Outcome + trajectory + LLM-judge; wire into CI |
-| Multi-turn memory | 🟡 Local-only | Works, but the API uses **one shared** conversation — a real deploy needs per-session memory keyed by a session id |
-| Tools | 🟡 Stubs | `get_weather`, `send_email`, `delete_record` return fake data — swap for real APIs |
-| RAG vector store | 🟡 In-memory | Fine to start; move to a real vector DB (Chroma/Pinecone/pgvector) at scale |
-| Concurrency | 🟡 Blocking | `agent.run()` is synchronous; run in a threadpool under load |
-| Auth / rate-limiting | ❌ Not built | Add before exposing the API publicly |
-| Prompt caching | ❌ Not built | Provider-side caching not yet wired for cost/latency |
-
-**Bottom line:** the *skeleton* — safety, resilience, observability, evaluation, provider abstraction — is production-grade. To ship, replace the stub tools with real integrations, add per-session memory and auth, and move the vector store to a managed DB.
+`Agent` calls LangGraph's `create_agent` and wires in whatever modules you pass. Because every
+module produces standard LangChain objects (tools, middleware, checkpointers), composition is
+uniform and swapping providers is a one-line change.
 
 ---
 
 ## 🏁 Quick start
 
-**1. Install**
 ```bash
 uv sync
 ```
 
-**2. Configure** — create `.env` in the project root (git-ignored). Set the active provider + at least one key:
+Create `.env` (git-ignored) with at least one provider key:
+
 ```dotenv
-LLM_PROVIDER=groq
 GROQ_API_KEY=your-key
-GROQ_MODEL=llama-3.3-70b-versatile
-# GOOGLE_API_KEY=...   # required only for RAG embeddings
-# also supported: OPENAI_API_KEY, ANTHROPIC_API_KEY, OPENROUTE_API_KEY
+# FRAMEWORK_MODEL=groq:llama-3.3-70b-versatile   # optional override
+# GOOGLE_API_KEY=...   # only for RAG embeddings
+# also usable: OPENAI_API_KEY, ANTHROPIC_API_KEY
 ```
 
-**3. Run the agent**
+**Run the chat server (streaming browser UI):**
 ```bash
-uv run python api.py
+uv run python serve.py      # → open http://127.0.0.1:8000
 ```
-Open **http://127.0.0.1:8001** for the browser chat, or call the API directly:
+
+**See every capability in one script:**
 ```bash
-curl -X POST localhost:8001/chat -H "content-type: application/json" \
-  -d '{"message":"What is the weather in Lahore, and what is 15% of 240?"}'
+uv run python examples/demo.py
 ```
 
-**4. Run the eval suite**
+**Run the tests (unit always; live integration when a key is set):**
 ```bash
-uv run python -m agent.eval.runner
+uv run pytest -q
 ```
 
-> **Port in use?** Set another: `set PORT=8002 && uv run python api.py` (Windows) — the server reads `HOST`/`PORT` from the environment.
-
----
-
-## 🔍 Using the pieces directly
-
+**Evaluate an agent:**
 ```python
-from agent.llms.factory import get_llm
-from agent.memory.conversation import ConversationMemory
-from agent.safety.guardrails import Guardrails, console_approver
-from agent.production.agent import ProductionAgent
-from agent.production.resilient_llm import ResilientLLM
+from framework import Agent
+from framework.middleware import resilience
+from framework.tools import get_weather, calculate
+from framework.eval import run_suite
 
-llm = get_llm("groq")
-agent = ProductionAgent(
-    ResilientLLM(providers=[("groq", llm)], max_retries=2),
-    Guardrails(max_calls=8, approver=console_approver),   # asks a human before destructive tools
-    memory=ConversationMemory(max_messages=20),           # multi-turn
-)
-
-result = agent.run("What is 15% of 240?")
-print(result["answer"])
-print(result["trace"])   # {model_calls, tool_calls, blocked_calls, total_ms}
+agent = Agent("groq:llama-3.3-70b-versatile", tools=[get_weather, calculate],
+              middleware=resilience())
+for r in run_suite(agent):
+    print(r["id"], "PASS" if r["passed"] else "FAIL", "-", r["detail"])
 ```
-
-**Structured output**
-```python
-from agent.structured.extract import extract_model
-from pydantic import BaseModel
-
-class Ticket(BaseModel):
-    summary: str
-    priority: str
-    category: str
-
-ticket = extract_model(llm, "Login returns 500s for all users since this morning.", Ticket)
-# → Ticket(summary='...', priority='High', category='Authentication')
-```
-
-`rag/`, `mcp/`, and `orchestration/` compose the same way — see each module's docstring.
 
 ---
 
 ## 🛡️ Safety in action
 
-Ask the browser agent to do something destructive:
+Give the agent a destructive tool behind an approval gate:
 
-> *"Email a summary to my boss at boss@corp.com."*
+```python
+from framework.middleware import guardrails, ApprovalRequired
+from framework.tools import delete_record
+from framework.memory import checkpoint
 
-The agent will decline — `send_email` is a destructive tool, and the approval gate defaults to **deny**. That's the Milestone-10 guardrail, visible in the UI: the model can *request* the action, but the code decides whether it *executes*.
+agent = Agent("groq:llama-3.3-70b-versatile", tools=[delete_record],
+              memory=checkpoint("memory"),
+              middleware=guardrails(require_approval=["delete_record"]))
+
+try:
+    agent.run("Delete record 42.", thread_id="s1")
+except ApprovalRequired as a:
+    print(a.requests)                 # [{'name': 'delete_record', 'args': {'record_id': '42'}}]
+agent.resume("s1", approve=False)     # → the delete never executes
+```
+
+The guarantee lives in the graph's control flow (an `interrupt()` before the side effect), not in
+the prompt — a denied approval means the tool body never runs.
+
+---
+
+## ⚠️ Honest notes
+
+- **`serve/` uses one shared memory** keyed by a client thread_id — fine for local/single-user; a
+  multi-user deploy needs per-authenticated-session scoping and auth (not built).
+- **Example tools are stubs** (`get_weather`, `send_email`, `delete_record`) — swap for real APIs.
+- **Persistent checkpointers** (sqlite/postgres) are a planned extension; `checkpoint("memory")`
+  is process-local.
+- LangGraph is pinned (`>=1.0,<2.0`) for stability; upgrades are opt-in.
 
 ---
 
 <div align="center">
 
-*Built as a hands-on climb through 11 milestones — step by step*
+*Built by porting a from-scratch agent onto LangGraph — design & phase plans in
+[`docs/superpowers/`](docs/superpowers/).*
 
 </div>

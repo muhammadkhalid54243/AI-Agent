@@ -1,25 +1,25 @@
 [project]
 name = "ai-agent"
 version = "0.1.0"
-description = "A production-lite agentic AI system with safety, resilience, and observability."
+description = "A modular LangGraph-based agent framework — memory, tools, RAG, MCP, orchestration, safety, eval, and serving."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    # LangGraph framework (new — framework/)
+    # Core: LangGraph agent runtime + provider integrations
     "langgraph>=1.0,<2.0",
     "langchain>=1.0,<2.0",
     "langchain-groq>=0.3",
     "langchain-openai>=0.3",
     "langchain-anthropic>=0.3",
     "langchain-google-genai>=2.0",
-    # Shared / legacy plain-Python agent/ (direct provider SDKs dropped due to
-    # a groq<1 vs >=1.5 conflict with langchain-groq; removed fully in Phase 6)
-    "mcp[cli]>=1.28.1",
-    "python-dotenv>=1.2.2",
+    # Capabilities
+    "langchain-mcp-adapters>=0.3.2",  # MCP tool loading
+    "mcp>=1.28.1",                     # example MCP server (mcp_server/server.py)
+    "numpy>=2.5.1",                    # RAG vector-store similarity
+    # Serving + config
     "starlette>=1.3.0",
     "uvicorn>=0.51.0",
-    "langchain-mcp-adapters>=0.3.2",
-    "numpy>=2.5.1",
+    "python-dotenv>=1.2.2",
 ]
 
 [dependency-groups]

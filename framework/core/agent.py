@@ -58,6 +58,24 @@ class Agent:
         answer = self._extract(result, thread_id)  # raises ApprovalRequired on interrupt
         return {"answer": answer, "summary": tracer.summary(), "events": tracer.events}
 
+    def stream(self, message: str, thread_id: str | None = None):
+        """Yield answer tokens as they are generated (typewriter streaming).
+
+        Only AI message tokens are yielded — tool outputs (ToolMessage) are
+        excluded so raw tool JSON never leaks into the streamed answer.
+        """
+        config = {"configurable": {"thread_id": thread_id}} if thread_id else None
+        for chunk, _meta in self._graph.stream(
+            {"messages": [{"role": "user", "content": message}]},
+            config=config,
+            stream_mode="messages",
+        ):
+            if type(chunk).__name__ != "AIMessageChunk":
+                continue
+            text = getattr(chunk, "content", "")
+            if text:
+                yield text
+
     def resume(self, thread_id: str, approve: bool) -> str:
         """Resume a run paused for approval. approve=True executes; False blocks."""
         config = {"configurable": {"thread_id": thread_id}}
