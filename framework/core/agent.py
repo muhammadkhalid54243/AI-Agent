@@ -10,6 +10,7 @@ from langgraph.types import Command
 
 from framework.core.models import resolve_model
 from framework.middleware.guardrails import ApprovalRequired
+from framework.observability.tracer import TrajectoryTracer
 
 
 class Agent:
@@ -43,6 +44,19 @@ class Agent:
             config=config,
         )
         return self._extract(result, thread_id)
+
+    def run_traced(self, message: str, thread_id: str | None = None) -> dict:
+        """Run and return {answer, summary, events} with a full trajectory trace."""
+        tracer = TrajectoryTracer()
+        config = {"callbacks": [tracer]}
+        if thread_id:
+            config["configurable"] = {"thread_id": thread_id}
+        result = self._graph.invoke(
+            {"messages": [{"role": "user", "content": message}]},
+            config=config,
+        )
+        answer = self._extract(result, thread_id)  # raises ApprovalRequired on interrupt
+        return {"answer": answer, "summary": tracer.summary(), "events": tracer.events}
 
     def resume(self, thread_id: str, approve: bool) -> str:
         """Resume a run paused for approval. approve=True executes; False blocks."""
