@@ -1,0 +1,152 @@
+"""Retrieval scoring — measure the INDEX, separately from answer quality.
+
+Phase 0 of the ingestion track. A bad answer is either a RETRIEVAL miss (the right
+chunk never surfaced) or a GENERATION miss (it surfaced and the model ignored it).
+Fusing those two signals makes the system permanently undebuggable, so this scores
+retrieval on its own — no LLM in the loop.
+
+A GoldItem declares what SHOULD surface for a question, by any of three signals:
+page, section, or an answer phrase that must appear in a retrieved chunk. A hit is
+"relevant" if it matches any declared signal — so the SAME gold set works before
+metadata exists (text-only baseline, phrase match) and after Phase 1-2 add page /
+section metadata (page/section match). Metrics:
+
+  - recall@k          did ≥1 relevant chunk make the top k? (k=5 ranking, k=20 index)
+  - MRR               1/rank of the first relevant chunk, averaged
+  - answer_hit_rate   does the answer text appear ANYWHERE in the top-k? (a
+                      generation-independent "could it even answer" probe)
+  - citation_accuracy top-1 page ∈ gold_pages — only scored once chunks carry pages;
+                      None at baseline (bare chunks have no page), by design.
+"""
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class GoldItem:
+    id: str
+    question: str
+    answer: str = ""
+    gold_pages: set = field(default_factory=set)
+    gold_sections: set = field(default_factory=set)
+    answer_phrases: list = field(default_factory=list)  # any-of; falls back to `answer`
+    kind: str = ""
+
+    def phrases(self) -> list:
+        return self.answer_phrases or ([self.answer] if self.answer else [])
+
+
+def _section_str(sec) -> str:
+    if isinstance(sec, (list, tuple)):
+        return " > ".join(str(s) for s in sec)
+    return str(sec or "")
+
+
+def is_relevant(hit: dict, gold: GoldItem) -> bool:
+    """A hit is relevant if it matches ANY declared gold signal (page/section/phrase)."""
+    page = hit.get("page")
+    if gold.gold_pages and page is not None and page in gold.gold_pages:
+        return True
+    if gold.gold_sections:
+        sec = _section_str(hit.get("section_path"))
+        if sec and any(g.lower() in sec.lower() for g in gold.gold_sections):
+            return True
+    text = (hit.get("text") or "").lower()
+    if text and any(p.lower() in text for p in gold.phrases() if p):
+        return True
+    return False
+
+
+def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
+    """Score a retriever against a gold set.
+
+    retrieve: callable(query: str, k: int) -> ranked list[hit dict]; a hit exposes
+              any of {"text", "page", "section_path"}.
+    gold:     list[GoldItem].
+    """
+    gold = list(gold)
+    ks = tuple(sorted(ks))
+    maxk = max(ks) if ks else 20
+    recall = {k: 0 for k in ks}
+    rr_sum = 0.0
+    answer_hits = 0
+    cite_ok = cite_total = 0
+    rows = []
+
+    # Unanswerable questions test ABSTENTION (an answer-eval concern), not retrieval
+    # recall — there is no relevant chunk to find. Exclude them from the metrics so
+    # they don't depress recall, but keep them visible in the row list and count.
+    scored = [g for g in gold if g.kind != "unanswerable"]
+    n_unanswerable = len(gold) - len(scored)
+
+    for g in scored:
+        hits = list(retrieve(g.question, maxk) or [])
+        first = next((i + 1 for i, h in enumerate(hits) if is_relevant(h, g)), None)
+        for k in ks:
+            if first is not None and first <= k:
+                recall[k] += 1
+        rr_sum += (1.0 / first) if first else 0.0
+
+        blob = " ".join((h.get("text") or "") for h in hits[:maxk]).lower()
+        phrases = g.phrases()
+        if phrases and any(p.lower() in blob for p in phrases if p):
+            answer_hits += 1
+
+        # Citation accuracy is only meaningful once chunks carry a page. At baseline
+        # (bare chunks) top-1 has no page → not scored, and reported as None.
+        if hits and g.gold_pages and hits[0].get("page") is not None:
+            cite_total += 1
+            if hits[0]["page"] in g.gold_pages:
+                cite_ok += 1
+
+        rows.append({"id": g.id, "kind": g.kind, "first_relevant_rank": first})
+
+    for g in gold:
+        if g.kind == "unanswerable":
+            rows.append({"id": g.id, "kind": g.kind, "first_relevant_rank": None})
+
+    n = len(scored) or 1
+    return {
+        "n": len(scored),
+        "n_unanswerable": n_unanswerable,
+        "recall": {f"@{k}": round(recall[k] / n, 3) for k in ks},
+        "mrr": round(rr_sum / n, 3),
+        "answer_hit_rate": round(answer_hits / n, 3),
+        "citation_accuracy": (round(cite_ok / cite_total, 3) if cite_total else None),
+        "citation_scored": cite_total,
+        "rows": rows,
+    }
+
+
+def retriever_fn(retriever):
+    """Adapt a framework `Retriever` into a retrieve(query, k) callable for scoring.
+
+    Surfaces whatever metadata the store carries — page/section appear once Phase 1-2
+    populate them; today only `idx` and text exist, which is the honest baseline.
+    """
+    def retrieve(query: str, k: int) -> list:
+        docs = retriever._store.similarity_search(query, k=k)
+        return [{"text": d.page_content,
+                 "page": d.metadata.get("page"),
+                 "section_path": d.metadata.get("section_path"),
+                 "idx": d.metadata.get("idx")} for d in docs]
+    return retrieve
+
+
+def load_gold(path: str) -> list:
+    """Load a JSONL gold file into GoldItems. Sets deserialize from lists."""
+    import json
+    items = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            d = json.loads(line)
+            items.append(GoldItem(
+                id=d["id"], question=d["question"], answer=d.get("answer", ""),
+                gold_pages=set(d.get("gold_pages", [])),
+                gold_sections=set(d.get("gold_sections", [])),
+                answer_phrases=d.get("answer_phrases", []), kind=d.get("kind", ""),
+            ))
+    return items

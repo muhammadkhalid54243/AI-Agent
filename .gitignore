@@ -1,21 +1,51 @@
-# Python-generated files
+# ─── Python ───────────────────────────────────────────────
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+*.egg-info/
 build/
 dist/
 wheels/
-*.egg-info
+*.so
 
-# Virtual environments
-.venv
+# ─── Virtual environments ─────────────────────────────────
+.venv/
+venv/
+env/
 
-# Environment variables
+# ─── Secrets / environment ────────────────────────────────
 .env
+.env.*
+!.env.example
 
-# documents
-docs/SHR/
+# ─── Test / tooling caches ────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# my framework
-CLUADE.md
+# ─── Agent runtime notes (framework.context.notes) ────────
+.agent_memory/
+
+# ─── Editors / OS ─────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ─── Claude Code local settings ───────────────────────────
+.claude/settings.local.json
+
+# ─── Documents: ignore all corpora/exports; KEEP the small eval gold sets ──
+docs/*
+!docs/gold/
+
+# ─── RAG ingest cache (text exports, indexes, embedding cache) ─────────────
+.rag_cache/
+
+# ─── Personal learning-system files (not part of the framework) ──
+CLAUDE.md
 PROGRESS.md
 ROADMAP.md

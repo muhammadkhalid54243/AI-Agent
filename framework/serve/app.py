@@ -8,9 +8,15 @@ Routes:
   POST /chat/stream   {message} ?thread_id=  -> SSE token stream
   POST /approve       {thread_id, approve}   -> {answer} or approval_required
 
-NOTE: one process-global Agent with shared memory keyed by thread_id from the
-client. Fine for local/single-user; a real multi-user deploy scopes agents/keys
-per authenticated session. run() is blocking; wrap in a threadpool under load.
+NOTE: one process-global Agent (built LAZILY on first chat via get_agent) with shared
+memory keyed by thread_id from the client. Fine for local/single-user; a real
+multi-user deploy scopes agents/keys per authenticated session. run() is blocking;
+wrap in a threadpool under load.
+
+RAG: get_agent adds the SHR document tools (DocumentRetriever) so the agent can answer
+from the ingested report. Lazy so import + /health stay cheap and the heavy index/model
+load is deferred to the first real chat. Config via env: RAG_DOC (default the SHR 2024
+PDF), RAG_RERANK=1 to enable the cross-encoder reranker (better ranking, slower/heavier).
 """
 
 import os
@@ -23,20 +29,118 @@ from starlette.routing import Route
 from framework import Agent
 from framework.memory import checkpoint
 from framework.middleware import resilience, ApprovalRequired
+from framework.middleware.guardrails import guardrails
 from framework.tools import get_weather, calculate
 from framework.serve.ui import INDEX_HTML
+
+# Hard cap for the base-agent fallback path (non-RAG); the RAG path is a single
+# model call, so it needs no loop cap. Non-negotiable per CLAUDE.md: loops are capped.
+MODEL_CALL_LIMIT = int(os.environ.get("RAG_MODEL_CALL_LIMIT", "6"))
 
 load_dotenv()
 
 
-def build_default_agent() -> Agent:
-    model = os.environ.get("FRAMEWORK_MODEL", "groq:llama-3.3-70b-versatile")
-    return Agent(model, tools=[get_weather, calculate],
-                 system_prompt="You are Nova. Use tools when helpful. Be concise.",
-                 memory=checkpoint("memory"), middleware=resilience())
+FRAMEWORK_MODEL = os.environ.get("FRAMEWORK_MODEL", "groq:openai/gpt-oss-120b")
+RAG_DOC = os.environ.get("RAG_DOC", "docs/SHR/2024_SHR_English.pdf")
+RAG_K = int(os.environ.get("RAG_K", "6"))
+NOT_COVERED = ("The report doesn't appear to cover that. Try a more specific fact, figure, "
+               "or section.")
+RAG_SYS = ("You answer questions about the HRCP State of Human Rights report using ONLY the "
+           "passages below. Cite the section in [brackets]. If the passages don't contain the "
+           "answer, say the report doesn't appear to cover it. Be concise.")
+
+_state = None
 
 
-AGENT = build_default_agent()
+def _build_state() -> dict:
+    """Lazy one-time build. RAG mode = RETRIEVE-THEN-ANSWER: one deterministic hybrid+
+    rerank retrieval, then ONE model call over those passages. This is reliable, unlike a
+    free agentic tool-loop, which gpt-oss over-uses — it keeps calling search_documents on
+    answerable questions until the cap cuts it off, producing a fallback even when the
+    right passage was retrieved at rank 1. Falls back to a base agent if RAG is unavailable."""
+    if os.path.exists(RAG_DOC):
+        try:
+            from framework.ingest import ingest
+            from framework.rag.retriever import DocumentRetriever
+            from framework.core.models import resolve_model
+            doc = ingest(RAG_DOC)                     # Phase-6 cache: parse is a no-op if unchanged
+            scorer = None
+            if os.environ.get("RAG_RERANK") == "1":
+                from framework.rag.rerank import default_scorer
+                scorer = default_scorer()
+            retriever = DocumentRetriever(doc, scorer=scorer)
+            print(f"[serve] RAG ready (retrieve-then-answer) over {doc.doc_id} "
+                  f"(rerank={'on' if scorer else 'off'}).", flush=True)
+            return {"mode": "rag", "retriever": retriever, "model": resolve_model(FRAMEWORK_MODEL),
+                    "doc": doc}
+        except Exception as e:                        # never let RAG init crash the server
+            print(f"[serve] RAG unavailable ({e}); base agent only.", flush=True)
+    agent = Agent(FRAMEWORK_MODEL, tools=[get_weather, calculate],
+                  system_prompt="You are Nova. Use tools when helpful. Be concise.",
+                  memory=checkpoint("memory"),
+                  middleware=[*resilience(), *guardrails(model_call_limit=MODEL_CALL_LIMIT)])
+    return {"mode": "agent", "agent": agent}
+
+
+def get_state() -> dict:
+    global _state
+    if _state is None:
+        _state = _build_state()
+    return _state
+
+
+def get_agent():
+    """Back-compat entry point (serve.py warms via this) — builds the state once."""
+    return get_state()
+
+
+def _glossary_note(question: str, doc) -> str:
+    """Prepend definitions for any abbreviations in the question, so acronym queries
+    always carry the expansion regardless of what retrieval surfaced."""
+    import re
+    notes = [f"{t} = {doc.glossary[t].expansion}" for t in set(re.findall(r"\b[A-Z]{2,8}\b", question))
+             if t in doc.glossary and doc.glossary[t].expansion]
+    return ("GLOSSARY: " + "; ".join(notes) + "\n\n") if notes else ""
+
+
+def _context(question: str, st: dict) -> str:
+    hits = st["retriever"]._search(question, RAG_K)
+    if not hits:
+        return ""
+    body = "\n\n".join(f"[{' > '.join(h['section_path']) or 'doc'} | p{h['page']}]\n{h['text']}"
+                       for h in hits)
+    return _glossary_note(question, st["doc"]) + body
+
+
+def _prompt(question: str, ctx: str) -> str:
+    return f"{RAG_SYS}\n\nPASSAGES:\n{ctx}\n\nQUESTION: {question}"
+
+
+def rag_answer(question: str) -> str:
+    st = get_state()
+    if st["mode"] != "rag":
+        return st["agent"].run(question)
+    ctx = _context(question, st)
+    if not ctx:
+        return NOT_COVERED
+    from langchain_core.messages import HumanMessage
+    return st["model"].invoke([HumanMessage(content=_prompt(question, ctx))]).content
+
+
+def rag_stream(question: str):
+    st = get_state()
+    if st["mode"] != "rag":
+        yield from st["agent"].stream(question)
+        return
+    ctx = _context(question, st)
+    if not ctx:
+        yield NOT_COVERED
+        return
+    from langchain_core.messages import HumanMessage
+    for chunk in st["model"].stream([HumanMessage(content=_prompt(question, ctx))]):
+        text = getattr(chunk, "content", "") or ""
+        if text:
+            yield text
 
 
 async def index(request):
@@ -54,11 +158,9 @@ async def chat(request):
     message = body.get("message")
     if not message:
         return JSONResponse({"error": "missing 'message'"}, status_code=400)
-    thread_id = body.get("thread_id")
     try:
-        result = AGENT.run_traced(message, thread_id=thread_id)
-        return JSONResponse({"status": "ok", **result})
-    except ApprovalRequired as a:
+        return JSONResponse({"status": "ok", "answer": rag_answer(message)})
+    except ApprovalRequired as a:                    # only the base-agent fallback can raise this
         return JSONResponse({"status": "approval_required",
                              "requests": a.requests, "thread_id": a.thread_id})
 
@@ -68,13 +170,12 @@ async def chat_stream(request):
     if body is None or not body.get("message"):
         return JSONResponse({"error": "missing 'message'"}, status_code=400)
     message = body["message"]
-    thread_id = request.query_params.get("thread_id")
 
     def sse():
         try:
-            for token in AGENT.stream(message, thread_id=thread_id):
+            for token in rag_stream(message):
                 yield f"data: {token}\n\n"
-        except ApprovalRequired as a:
+        except ApprovalRequired as a:                # only the base-agent fallback can raise this
             yield f"data: [approval required for {a.requests}]\n\n"
 
     return StreamingResponse(sse(), media_type="text/event-stream")
@@ -84,8 +185,11 @@ async def approve(request):
     body = await _json(request)
     if body is None or "thread_id" not in body:
         return JSONResponse({"error": "missing 'thread_id'"}, status_code=400)
+    st = get_state()
+    if st["mode"] != "agent":                        # retrieve-then-answer has no approval flow
+        return JSONResponse({"error": "no approval pending"}, status_code=400)
     try:
-        answer = AGENT.resume(body["thread_id"], approve=bool(body.get("approve")))
+        answer = st["agent"].resume(body["thread_id"], approve=bool(body.get("approve")))
         return JSONResponse({"status": "ok", "answer": answer})
     except ApprovalRequired as a:
         return JSONResponse({"status": "approval_required",

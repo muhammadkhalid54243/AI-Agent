@@ -2,70 +2,167 @@
 
 # 🤖 Agent Framework
 
-**A modular, LangGraph-based agent framework — compose exactly the capabilities you need.**
+### A modular, production-minded agent framework built on LangGraph
 
-Provider-agnostic · memory · tools · RAG · MCP · orchestration · safety · eval · streaming UI
+*Compose exactly the capabilities you need — memory, tools, RAG, MCP, orchestration, safety, evaluation, and a streaming chat UI — each an opt-in module, nothing mandatory but a model.*
+
+<br>
+
+![Python](https://img.shields.io/badge/python-3.12+-blue)
+![LangGraph](https://img.shields.io/badge/built%20on-LangGraph%201.x-1a5)
+![Tests](https://img.shields.io/badge/tests-30%20passing-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
 </div>
 
 ---
 
-## What is this?
+## Why this exists
 
-A small framework built on **LangGraph 1.x**. One composable `Agent` sits at the center; every
-capability is an **opt-in module** you add as needed — nothing is mandatory except a model. It
-rides LangGraph's stable prebuilts (fewer deprecations) while keeping each capability behind a
-thin seam of its own.
+Most agent code is either a thin wrapper around one provider or a monolith you can't take apart.
+This framework is neither. **Every capability was first implemented from scratch in plain Python
+— then ported onto LangGraph's stable primitives.** The result: abstractions that are *understood*,
+not just imported, wrapped in a clean, composable API.
+
+If you want to see how a real agent stack fits together — provider abstraction, a ReAct loop,
+per-session memory, human-in-the-loop safety, retries, observability, RAG, MCP, multi-agent
+orchestration, and evaluation — this is a compact, readable, tested example of all of it.
+
+---
+
+## Quick look
 
 ```python
 from framework import Agent
 from framework.memory import checkpoint
 from framework.middleware import guardrails, resilience
 from framework.tools import get_weather, calculate
-from framework.rag import Retriever
-from framework.mcp import load_mcp_tools
 
 agent = Agent(
     "groq:llama-3.3-70b-versatile",
-    fallbacks=["openai:gpt-4o-mini"],                       # provider fallback
+    fallbacks=["openai:gpt-4o-mini"],                       # automatic provider fallback
     tools=[get_weather, calculate],
-    memory=checkpoint("memory"),                            # per-session via thread_id
-    middleware=guardrails(require_approval=["send_email"],  # human-in-the-loop gate
-                          model_call_limit=8)               # spend cap
-              + resilience(),                               # retry transient errors
+    memory=checkpoint("memory"),                            # per-session memory (thread_id)
+    middleware=guardrails(model_call_limit=8) + resilience(),  # spend cap + retry
     system_prompt="You are Nova. Be concise.",
 )
 
-agent.add_tools([Retriever("docs/").as_tool()])             # RAG, opt-in
-agent.add_tools(load_mcp_tools({"dir": {...}}))             # MCP, opt-in
-
 print(agent.run("What's the weather in Lahore?", thread_id="user-1"))
 for token in agent.stream("Tell me a joke", thread_id="user-1"):
-    print(token, end="")
+    print(token, end="")     # streams token by token
+```
+
+Add more capabilities only when you need them:
+
+```python
+from framework.rag import Retriever
+from framework.mcp import load_mcp_tools
+
+agent.add_tools([Retriever("docs/").as_tool()])            # RAG grounding
+agent.add_tools(load_mcp_tools({"dir": {...}}))            # tools discovered over MCP
 ```
 
 ---
 
-## ✨ Capabilities
+## What's inside
 
-| Capability | Module | Backed by |
-|-----------|--------|-----------|
-| 🔌 **Providers + fallback** | `framework.core` | `init_chat_model` + `.with_fallbacks()` |
-| 🧠 **Memory (per-session)** | `framework.memory` | checkpointer + `thread_id` |
-| 🛠️ **Tools + ReAct loop** | `framework.tools`, `core` | `create_agent` |
-| 🛡️ **Safety** (approval gate, spend cap) | `framework.middleware` | `HumanInTheLoop` + `ModelCallLimit` middleware |
-| ♻️ **Resilience** (retry/backoff) | `framework.middleware` | `ModelRetryMiddleware` |
-| 📐 **Structured output** | `framework.structured` | `with_structured_output` + Pydantic |
-| 🔭 **Observability** | `framework.observability` | callback tracer → `run_traced()` |
-| 📚 **RAG** | `framework.rag` | vector store + retriever tool |
-| 🔗 **MCP** | `framework.mcp` | `langchain-mcp-adapters` |
-| 🎭 **Orchestration** | `framework.orchestration` | sub-agents-as-tools + supervisor |
-| 🎯 **Evaluation** | `framework.eval` | outcome + trajectory + LLM-judge |
-| 🚀 **Serving + UI** | `framework.serve` | starlette + SSE streaming + browser chat |
+| Capability | Module | How it's done |
+|-----------|--------|---------------|
+| 🔌 **Multi-provider + fallback** | `framework.core` | `init_chat_model` + `.with_fallbacks()` — swap Groq/OpenAI/Anthropic/Google in one line |
+| 🧠 **Per-session memory** | `framework.memory` | LangGraph checkpointer keyed by `thread_id` |
+| 🛠️ **Tools + ReAct loop** | `framework.tools`, `core` | `create_agent` — think → act → observe |
+| 🛡️ **Human-in-the-loop safety** | `framework.middleware` | `interrupt()` before destructive tools — a denied approval means it *never runs* |
+| 💸 **Spend cap** | `framework.middleware` | model-call limit per run |
+| ♻️ **Resilience** | `framework.middleware` | retry with exponential backoff |
+| 📐 **Structured output** | `framework.structured` | native `with_structured_output` + Pydantic validation |
+| 🔭 **Observability** | `framework.observability` | callback tracer → `run_traced()` returns a full trajectory |
+| 📚 **RAG** | `framework.rag` | vector store → retriever exposed as a tool |
+| 🔗 **MCP** | `framework.mcp` | discover & call tools over the Model Context Protocol |
+| 🎭 **Orchestration** | `framework.orchestration` | sub-agents-as-tools + a supervisor |
+| 🎯 **Evaluation** | `framework.eval` | scores **outcome _and_ trajectory** + LLM-as-judge |
+| 🚀 **Serving + UI** | `framework.serve` | HTTP + SSE streaming + a browser chat page |
 
 ---
 
-## 🧭 Architecture
+## Getting started
+
+**1. Install** (uses [uv](https://docs.astral.sh/uv/)):
+
+```bash
+uv sync
+```
+
+**2. Configure** — copy the example env and add at least one provider key:
+
+```bash
+cp .env.example .env
+# then edit .env and set GROQ_API_KEY (or another provider)
+```
+
+**3. Run the streaming chat server:**
+
+```bash
+uv run python serve.py      # → open http://127.0.0.1:8000
+```
+
+**4. Or see every capability in one script:**
+
+```bash
+uv run python examples/demo.py
+```
+
+**5. Run the tests:**
+
+```bash
+uv run pytest -q            # unit tests always; live tests run when a key is set
+```
+
+---
+
+## A few things worth seeing
+
+**Human-in-the-loop safety** — the guarantee lives in the graph's control flow, not the prompt:
+
+```python
+from framework.middleware import guardrails, ApprovalRequired
+from framework.tools import delete_record
+from framework.memory import checkpoint
+
+agent = Agent("groq:llama-3.3-70b-versatile", tools=[delete_record],
+              memory=checkpoint("memory"),
+              middleware=guardrails(require_approval=["delete_record"]))
+try:
+    agent.run("Delete record 42.", thread_id="s1")
+except ApprovalRequired as a:
+    print(a.requests)              # [{'name': 'delete_record', 'args': {'record_id': '42'}}]
+agent.resume("s1", approve=False)  # the delete never executes
+```
+
+**Evaluation that catches lucky guesses** — a right answer via the wrong path still fails:
+
+```python
+from framework.eval import run_suite
+for r in run_suite(agent):
+    print(r["id"], "PASS" if r["passed"] else "FAIL", "-", r["detail"])
+```
+
+**Structured, validated output:**
+
+```python
+from framework.structured import extract
+from pydantic import BaseModel
+
+class Ticket(BaseModel):
+    summary: str
+    priority: str
+
+extract("groq:llama-3.3-70b-versatile", "Login 500s for all users. Urgent.", Ticket)
+# → Ticket(summary='...', priority='high')
+```
+
+---
+
+## Architecture
 
 ```
 framework/
@@ -80,102 +177,27 @@ framework/
 ├── orchestration/   subagent() + supervisor()
 ├── eval/            dataset + judge + run_suite()
 └── serve/           app (HTTP + SSE) + browser UI
-serve.py             run the chat server
-examples/demo.py     see everything working
-mcp_server/          example MCP server (company directory)
-tests/               TDD suite (unit + key-gated live integration)
 ```
 
-`Agent` calls LangGraph's `create_agent` and wires in whatever modules you pass. Because every
+`Agent` builds on LangGraph's `create_agent` and wires in whatever modules you pass. Because every
 module produces standard LangChain objects (tools, middleware, checkpointers), composition is
-uniform and swapping providers is a one-line change.
+uniform — and the whole thing is pinned to LangGraph `>=1.0,<2.0` for stability.
+
+The full design spec and phase-by-phase implementation plans live in
+[`docs/superpowers/`](docs/superpowers/).
 
 ---
 
-## 🏁 Quick start
+## Honest limitations
 
-```bash
-uv sync
-```
+This is a focused, readable framework — not a hosted platform. Known edges:
 
-Create `.env` (git-ignored) with at least one provider key:
-
-```dotenv
-GROQ_API_KEY=your-key
-# FRAMEWORK_MODEL=groq:llama-3.3-70b-versatile   # optional override
-# GOOGLE_API_KEY=...   # only for RAG embeddings
-# also usable: OPENAI_API_KEY, ANTHROPIC_API_KEY
-```
-
-**Run the chat server (streaming browser UI):**
-```bash
-uv run python serve.py      # → open http://127.0.0.1:8000
-```
-
-**See every capability in one script:**
-```bash
-uv run python examples/demo.py
-```
-
-**Run the tests (unit always; live integration when a key is set):**
-```bash
-uv run pytest -q
-```
-
-**Evaluate an agent:**
-```python
-from framework import Agent
-from framework.middleware import resilience
-from framework.tools import get_weather, calculate
-from framework.eval import run_suite
-
-agent = Agent("groq:llama-3.3-70b-versatile", tools=[get_weather, calculate],
-              middleware=resilience())
-for r in run_suite(agent):
-    print(r["id"], "PASS" if r["passed"] else "FAIL", "-", r["detail"])
-```
+- The bundled **example tools are stubs** (`get_weather`, `send_email`, `delete_record`) — swap for real APIs.
+- **`serve/` uses one shared conversation** keyed by a client thread id — great for local/single-user; a multi-user deployment needs per-authenticated-session scoping and auth.
+- **Memory is in-process**; persistent checkpointers (SQLite/Postgres) are a planned drop-in.
 
 ---
 
-## 🛡️ Safety in action
+## License
 
-Give the agent a destructive tool behind an approval gate:
-
-```python
-from framework.middleware import guardrails, ApprovalRequired
-from framework.tools import delete_record
-from framework.memory import checkpoint
-
-agent = Agent("groq:llama-3.3-70b-versatile", tools=[delete_record],
-              memory=checkpoint("memory"),
-              middleware=guardrails(require_approval=["delete_record"]))
-
-try:
-    agent.run("Delete record 42.", thread_id="s1")
-except ApprovalRequired as a:
-    print(a.requests)                 # [{'name': 'delete_record', 'args': {'record_id': '42'}}]
-agent.resume("s1", approve=False)     # → the delete never executes
-```
-
-The guarantee lives in the graph's control flow (an `interrupt()` before the side effect), not in
-the prompt — a denied approval means the tool body never runs.
-
----
-
-## ⚠️ Honest notes
-
-- **`serve/` uses one shared memory** keyed by a client thread_id — fine for local/single-user; a
-  multi-user deploy needs per-authenticated-session scoping and auth (not built).
-- **Example tools are stubs** (`get_weather`, `send_email`, `delete_record`) — swap for real APIs.
-- **Persistent checkpointers** (sqlite/postgres) are a planned extension; `checkpoint("memory")`
-  is process-local.
-- LangGraph is pinned (`>=1.0,<2.0`) for stability; upgrades are opt-in.
-
----
-
-<div align="center">
-
-*Built by porting a from-scratch agent onto LangGraph — design & phase plans in
-[`docs/superpowers/`](docs/superpowers/).*
-
-</div>
+MIT — see [`LICENSE`](LICENSE).

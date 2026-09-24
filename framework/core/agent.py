@@ -56,7 +56,8 @@ class Agent:
             config=config,
         )
         answer = self._extract(result, thread_id)  # raises ApprovalRequired on interrupt
-        return {"answer": answer, "summary": tracer.summary(), "events": tracer.events}
+        return {"answer": answer, "summary": tracer.summary(),
+                "tokens": tracer.token_report(), "events": tracer.events}
 
     def stream(self, message: str, thread_id: str | None = None):
         """Yield answer tokens as they are generated (typewriter streaming).

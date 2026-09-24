@@ -13,13 +13,17 @@ dependencies = [
     "langchain-anthropic>=0.3",
     "langchain-google-genai>=2.0",
     # Capabilities
-    "langchain-mcp-adapters>=0.3.2",  # MCP tool loading
-    "mcp>=1.28.1",                     # example MCP server (mcp_server/server.py)
-    "numpy>=2.5.1",                    # RAG vector-store similarity
+    "langchain-mcp-adapters>=0.3.2", # MCP tool loading
+    "mcp>=1.28.1", # example MCP server (mcp_server/server.py)
+    "numpy>=2.5.1", # RAG vector-store similarity
     # Serving + config
     "starlette>=1.3.0",
     "uvicorn>=0.51.0",
     "python-dotenv>=1.2.2",
+    "pymupdf>=1.28.2",
+    "langchain-huggingface>=1.2.2",
+    "sentence-transformers>=6.0.1",
+    "rank-bm25>=0.2.2",
 ]
 
 [dependency-groups]
