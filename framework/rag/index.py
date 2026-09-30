@@ -51,4 +51,4 @@ class HybridIndex:
     def _hit(self, cid: str) -> dict:
         c = self._by_id[cid]
         return {"text": c.text, "page": c.page_start, "section_path": list(c.section_path),
-                "chunk_id": c.id, "kind": c.kind}
+                "chunk_id": c.id, "kind": c.kind, "doc_id": c.doc_id}

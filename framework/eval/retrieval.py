@@ -31,6 +31,7 @@ class GoldItem:
     gold_sections: set = field(default_factory=set)
     answer_phrases: list = field(default_factory=list)  # any-of; falls back to `answer`
     kind: str = ""
+    gold_doc_id: str = ""            # which document the answer must come from (multi-doc)
 
     def phrases(self) -> list:
         return self.answer_phrases or ([self.answer] if self.answer else [])
@@ -43,7 +44,17 @@ def _section_str(sec) -> str:
 
 
 def is_relevant(hit: dict, gold: GoldItem) -> bool:
-    """A hit is relevant if it matches ANY declared gold signal (page/section/phrase)."""
+    """A hit is relevant if it matches ANY declared gold signal (page/section/phrase).
+
+    Multi-doc gate: if the gold item names a `gold_doc_id` and the hit carries a
+    `doc_id`, they must match first — otherwise a same-named section from the WRONG
+    report (every SHR year has "Key issues") would count as a hit and hide cross-year
+    confusion. Hits without a doc_id (single-doc baseline) skip the gate.
+    """
+    if gold.gold_doc_id:
+        hd = hit.get("doc_id")
+        if hd is not None and hd != gold.gold_doc_id:
+            return False
     page = hit.get("page")
     if gold.gold_pages and page is not None and page in gold.gold_pages:
         return True
@@ -71,6 +82,7 @@ def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
     rr_sum = 0.0
     answer_hits = 0
     cite_ok = cite_total = 0
+    attr_ok = attr_total = 0        # doc-attribution: is top-1 from the RIGHT document?
     rows = []
 
     # Unanswerable questions test ABSTENTION (an answer-eval concern), not retrieval
@@ -99,6 +111,12 @@ def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
             if hits[0]["page"] in g.gold_pages:
                 cite_ok += 1
 
+        # Doc-attribution: only meaningful when gold names a doc and hits carry doc_id.
+        if g.gold_doc_id and hits and hits[0].get("doc_id") is not None:
+            attr_total += 1
+            if hits[0]["doc_id"] == g.gold_doc_id:
+                attr_ok += 1
+
         rows.append({"id": g.id, "kind": g.kind, "first_relevant_rank": first})
 
     for g in gold:
@@ -114,6 +132,8 @@ def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
         "answer_hit_rate": round(answer_hits / n, 3),
         "citation_accuracy": (round(cite_ok / cite_total, 3) if cite_total else None),
         "citation_scored": cite_total,
+        "doc_attribution": (round(attr_ok / attr_total, 3) if attr_total else None),
+        "doc_attribution_scored": attr_total,
         "rows": rows,
     }
 
@@ -148,5 +168,6 @@ def load_gold(path: str) -> list:
                 gold_pages=set(d.get("gold_pages", [])),
                 gold_sections=set(d.get("gold_sections", [])),
                 answer_phrases=d.get("answer_phrases", []), kind=d.get("kind", ""),
+                gold_doc_id=d.get("doc_id", ""),
             ))
     return items

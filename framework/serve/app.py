@@ -13,10 +13,11 @@ memory keyed by thread_id from the client. Fine for local/single-user; a real
 multi-user deploy scopes agents/keys per authenticated session. run() is blocking;
 wrap in a threadpool under load.
 
-RAG: get_agent adds the SHR document tools (DocumentRetriever) so the agent can answer
-from the ingested report. Lazy so import + /health stay cheap and the heavy index/model
-load is deferred to the first real chat. Config via env: RAG_DOC (default the SHR 2024
-PDF), RAG_RERANK=1 to enable the cross-encoder reranker (better ranking, slower/heavier).
+RAG: get_state builds a CorpusRetriever over one or more ingested reports and answers
+via retrieve-then-answer. Lazy so import + /health stay cheap and the heavy index/model
+load is deferred to first chat. Config via env: RAG_DOCS (a directory of PDFs or a
+comma-separated list; default docs/SHR), RAG_DOC (single-path override for back-compat),
+RAG_RERANK=1 to enable the cross-encoder reranker (better ranking, slower/heavier).
 """
 
 import os
@@ -41,38 +42,70 @@ load_dotenv()
 
 
 FRAMEWORK_MODEL = os.environ.get("FRAMEWORK_MODEL", "groq:openai/gpt-oss-120b")
-RAG_DOC = os.environ.get("RAG_DOC", "docs/SHR/2024_SHR_English.pdf")
-RAG_K = int(os.environ.get("RAG_K", "6"))
-NOT_COVERED = ("The report doesn't appear to cover that. Try a more specific fact, figure, "
+# RAG_DOCS: a directory (ingest every *.pdf in it) or a comma-separated list of paths.
+# RAG_DOC (single path) still wins if set, for back-compat with the old single-doc serve.
+RAG_DOCS = os.environ.get("RAG_DOCS", "docs/SHR")
+RAG_K = int(os.environ.get("RAG_K", "8"))
+NOT_COVERED = ("The reports don't appear to cover that. Try a more specific fact, figure, "
                "or section.")
-RAG_SYS = ("You answer questions about the HRCP State of Human Rights report using ONLY the "
-           "passages below. Cite the section in [brackets]. If the passages don't contain the "
-           "answer, say the report doesn't appear to cover it. Be concise.")
+RAG_SYS = (
+    "You answer questions about HRCP human-rights reports using ONLY the passages below. "
+    "Each passage begins with its source line: Report Year — section, pN.\n"
+    "Rules:\n"
+    "- Put each distinct fact on its OWN line.\n"
+    "- End every line with its source in brackets, copied from that passage's source line: "
+    "[Report Year, pN] — e.g. [SHR 2024, p18]. Never cite a bare passage number like [3].\n"
+    "- These reports are yearly, so the same figure differs across years. When more than "
+    "one report or year is relevant, give EACH on its own line with its own citation — "
+    "never merge them into one number or silently pick just one year.\n"
+    "- Use only what the passages state; add nothing. If they don't cover the question, "
+    "say the reports don't appear to cover it.\n"
+    "Be concise.")
 
 _state = None
 
 
+def _resolve_doc_paths() -> list:
+    """Which documents to serve. A single RAG_DOC overrides; otherwise RAG_DOCS is a
+    directory of PDFs or a comma-separated list of paths."""
+    single = os.environ.get("RAG_DOC")
+    if single:
+        return [single]
+    if os.path.isdir(RAG_DOCS):
+        return sorted(os.path.join(RAG_DOCS, f) for f in os.listdir(RAG_DOCS)
+                      if f.lower().endswith(".pdf"))
+    return [p.strip() for p in RAG_DOCS.split(",") if p.strip()]
+
+
 def _build_state() -> dict:
-    """Lazy one-time build. RAG mode = RETRIEVE-THEN-ANSWER: one deterministic hybrid+
-    rerank retrieval, then ONE model call over those passages. This is reliable, unlike a
-    free agentic tool-loop, which gpt-oss over-uses — it keeps calling search_documents on
-    answerable questions until the cap cuts it off, producing a fallback even when the
-    right passage was retrieved at rank 1. Falls back to a base agent if RAG is unavailable."""
-    if os.path.exists(RAG_DOC):
+    """Lazy one-time build. RAG mode = RETRIEVE-THEN-ANSWER over a CORPUS: one
+    deterministic hybrid+rerank retrieval across all loaded reports, then ONE model call
+    over those passages. This is reliable, unlike a free agentic tool-loop, which gpt-oss
+    over-uses — it keeps calling search_documents on answerable questions until the cap
+    cuts it off, producing a fallback even when the right passage was retrieved at rank 1.
+    Falls back to a base agent if RAG is unavailable."""
+    paths = [p for p in _resolve_doc_paths() if os.path.exists(p)]
+    if paths:
         try:
             from framework.ingest import ingest
-            from framework.rag.retriever import DocumentRetriever
+            from framework.rag.corpus import CorpusRetriever
             from framework.core.models import resolve_model
-            doc = ingest(RAG_DOC)                     # Phase-6 cache: parse is a no-op if unchanged
+            docs = []
+            for i, p in enumerate(paths, 1):          # Phase-6 cache: unchanged files are no-ops
+                print(f"[serve] ingesting {i}/{len(paths)}: {os.path.basename(p)} ...", flush=True)
+                docs.append(ingest(p))
             scorer = None
             if os.environ.get("RAG_RERANK") == "1":
                 from framework.rag.rerank import default_scorer
                 scorer = default_scorer()
-            retriever = DocumentRetriever(doc, scorer=scorer)
-            print(f"[serve] RAG ready (retrieve-then-answer) over {doc.doc_id} "
-                  f"(rerank={'on' if scorer else 'off'}).", flush=True)
-            return {"mode": "rag", "retriever": retriever, "model": resolve_model(FRAMEWORK_MODEL),
-                    "doc": doc}
+            print(f"[serve] embedding + building hybrid index over {len(docs)} doc(s) "
+                  "(first run per doc is slow on CPU; cached after) ...", flush=True)
+            retriever = CorpusRetriever(docs, scorer=scorer)
+            labels = ", ".join(retriever.doc_label(d.doc_id) for d in docs)
+            print(f"[serve] RAG ready (retrieve-then-answer) over {len(docs)} doc(s): "
+                  f"{labels} (rerank={'on' if scorer else 'off'}).", flush=True)
+            return {"mode": "rag", "retriever": retriever,
+                    "model": resolve_model(FRAMEWORK_MODEL), "docs": docs}
         except Exception as e:                        # never let RAG init crash the server
             print(f"[serve] RAG unavailable ({e}); base agent only.", flush=True)
     agent = Agent(FRAMEWORK_MODEL, tools=[get_weather, calculate],
@@ -94,22 +127,24 @@ def get_agent():
     return get_state()
 
 
-def _glossary_note(question: str, doc) -> str:
+def _glossary_note(question: str, glossary: dict) -> str:
     """Prepend definitions for any abbreviations in the question, so acronym queries
     always carry the expansion regardless of what retrieval surfaced."""
     import re
-    notes = [f"{t} = {doc.glossary[t].expansion}" for t in set(re.findall(r"\b[A-Z]{2,8}\b", question))
-             if t in doc.glossary and doc.glossary[t].expansion]
+    notes = [f"{t} = {glossary[t].expansion}" for t in set(re.findall(r"\b[A-Z]{2,8}\b", question))
+             if t in glossary and glossary[t].expansion]
     return ("GLOSSARY: " + "; ".join(notes) + "\n\n") if notes else ""
 
 
 def _context(question: str, st: dict) -> str:
-    hits = st["retriever"]._search(question, RAG_K)
+    r = st["retriever"]
+    hits = r._search(question, RAG_K)
     if not hits:
         return ""
-    body = "\n\n".join(f"[{' > '.join(h['section_path']) or 'doc'} | p{h['page']}]\n{h['text']}"
-                       for h in hits)
-    return _glossary_note(question, st["doc"]) + body
+    body = "\n\n".join(
+        f"{r.doc_label(h['doc_id'])} — {' > '.join(h['section_path']) or 'doc'}, p{h['page']}:"
+        f"\n{h['text']}" for h in hits)
+    return _glossary_note(question, r.glossary) + body
 
 
 def _prompt(question: str, ctx: str) -> str:
