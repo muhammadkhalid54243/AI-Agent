@@ -8,7 +8,25 @@ This is why the `report` profile exists: most reports should never be chunked. A
 pipeline that always retrieves is strictly worse than one that knows when not to.
 """
 
+import re
+
 from framework.context.budget import count_tokens
+
+# Query SHAPE for retrieval dispatch (Phase D). Deterministic, no LLM: a "list every X"
+# question needs the WHOLE section, a "table" question the whole table, a fact question
+# the usual top-k. "all"/"how many" are excluded — they over-trigger on plain facts.
+_ENUMERATE = re.compile(r"\b(list|every|each|enumerate|entire)\b", re.I)
+
+
+def classify_query(question: str) -> str:
+    """Return the query shape: 'table' | 'enumerate' | 'fact'."""
+    q = question or ""
+    if re.search(r"\btable\b", q, re.I):
+        return "table"
+    if _ENUMERATE.search(q):
+        return "enumerate"
+    return "fact"
+
 
 # Below this many tokens, stuff the whole document; above it, retrieve.
 DEFAULT_THRESHOLD = 50_000

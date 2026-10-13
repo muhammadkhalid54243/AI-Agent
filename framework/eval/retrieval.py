@@ -17,6 +17,11 @@ section metadata (page/section match). Metrics:
                       generation-independent "could it even answer" probe)
   - citation_accuracy top-1 page ∈ gold_pages — only scored once chunks carry pages;
                       None at baseline (bare chunks have no page), by design.
+  - completeness      EXHAUSTIVE items only: fraction of expected_items present in the
+                      CONTEXT the product assembles (doc-gated retrieve(q, context_k), the
+                      WHOLE returned context — not top-k-sliced, since a whole-section
+                      dispatch isn't a ranked list). recall@k fires on ONE relevant chunk,
+                      so it is blind to enumeration; completeness is not.
 """
 
 from dataclasses import dataclass, field
@@ -32,6 +37,7 @@ class GoldItem:
     answer_phrases: list = field(default_factory=list)  # any-of; falls back to `answer`
     kind: str = ""
     gold_doc_id: str = ""            # which document the answer must come from (multi-doc)
+    expected_items: list = field(default_factory=list)  # exhaustive: ALL must appear (completeness)
 
     def phrases(self) -> list:
         return self.answer_phrases or ([self.answer] if self.answer else [])
@@ -68,12 +74,17 @@ def is_relevant(hit: dict, gold: GoldItem) -> bool:
     return False
 
 
-def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
+def score_retrieval(retrieve, gold, *, ks=(5, 20), context_k=8, is_confident=None) -> dict:
     """Score a retriever against a gold set.
 
     retrieve: callable(query: str, k: int) -> ranked list[hit dict]; a hit exposes
               any of {"text", "page", "section_path"}.
     gold:     list[GoldItem].
+    is_confident: optional callable(question) -> bool — the deterministic abstention gate.
+              When given, two abstention metrics are added: `abstain_rate` (fraction of
+              `unanswerable` items the gate correctly abstains on — want HIGH) and
+              `false_abstain_rate` (fraction of ANSWERABLE items it wrongly abstains on —
+              want ~0). None when not supplied, so existing callers are unaffected.
     """
     gold = list(gold)
     ks = tuple(sorted(ks))
@@ -83,13 +94,16 @@ def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
     answer_hits = 0
     cite_ok = cite_total = 0
     attr_ok = attr_total = 0        # doc-attribution: is top-1 from the RIGHT document?
+    comp_sum = 0.0                   # completeness accumulator (exhaustive items only)
     rows = []
 
-    # Unanswerable questions test ABSTENTION (an answer-eval concern), not retrieval
-    # recall — there is no relevant chunk to find. Exclude them from the metrics so
-    # they don't depress recall, but keep them visible in the row list and count.
-    scored = [g for g in gold if g.kind != "unanswerable"]
-    n_unanswerable = len(gold) - len(scored)
+    # Unanswerable questions test ABSTENTION (an answer-eval concern) and exhaustive
+    # questions test ENUMERATION (measured by completeness below). Both are excluded from
+    # the single-fact metrics: recall@k fires on ONE relevant chunk, so it neither has a
+    # target for unanswerable nor can see whether the UNION of many chunks was retrieved.
+    scored = [g for g in gold if g.kind not in ("unanswerable", "exhaustive")]
+    exhaustive = [g for g in gold if g.kind == "exhaustive"]
+    n_unanswerable = sum(1 for g in gold if g.kind == "unanswerable")
 
     for g in scored:
         hits = list(retrieve(g.question, maxk) or [])
@@ -119,9 +133,39 @@ def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
 
         rows.append({"id": g.id, "kind": g.kind, "first_relevant_rank": first})
 
+    # Completeness (exhaustive items): fraction of expected_items present in the CONTEXT the
+    # product actually assembles — the doc-gated FULL output of retrieve(q, context_k). Not
+    # top-k-sliced: a dispatch that returns a whole section (Phase D) is not a ranked list, so
+    # slicing would misread it. Doc-gating stops identical cross-year text (the UDHR appendix,
+    # verbatim across SHR years) from satisfying a question about one specific year.
+    for g in exhaustive:
+        ctx = list(retrieve(g.question, context_k) or [])
+        if g.gold_doc_id:
+            ctx = [h for h in ctx if h.get("doc_id") in (None, g.gold_doc_id)]
+        items = [it.lower() for it in g.expected_items if it]
+        blob = " ".join((h.get("text") or "") for h in ctx).lower()
+        frac = (sum(1 for it in items if it in blob) / len(items)) if items else 0.0
+        comp_sum += frac
+        rows.append({"id": g.id, "kind": g.kind, "completeness": round(frac, 3),
+                     "context_chunks": len(ctx)})
+
+    # Abstention (needs the gate): abstain correctly on unanswerable, answer on the rest.
+    abstain_unans = abstain_ans = n_ans_for_abstain = 0
+    if is_confident is not None:
+        for g in gold:
+            answerable_here = g.kind != "unanswerable"
+            confident = bool(is_confident(g.question))
+            if answerable_here:
+                n_ans_for_abstain += 1
+                if not confident:
+                    abstain_ans += 1
+            elif not confident:
+                abstain_unans += 1
+
     for g in gold:
         if g.kind == "unanswerable":
-            rows.append({"id": g.id, "kind": g.kind, "first_relevant_rank": None})
+            abstained = (not bool(is_confident(g.question))) if is_confident is not None else None
+            rows.append({"id": g.id, "kind": g.kind, "abstained": abstained})
 
     n = len(scored) or 1
     return {
@@ -134,6 +178,14 @@ def score_retrieval(retrieve, gold, *, ks=(5, 20)) -> dict:
         "citation_scored": cite_total,
         "doc_attribution": (round(attr_ok / attr_total, 3) if attr_total else None),
         "doc_attribution_scored": attr_total,
+        "completeness": (round(comp_sum / len(exhaustive), 3) if exhaustive else None),
+        "completeness_scored": len(exhaustive),
+        "completeness_context_k": context_k,
+        "abstain_rate": (round(abstain_unans / n_unanswerable, 3)
+                         if (is_confident is not None and n_unanswerable) else None),
+        "false_abstain_rate": (round(abstain_ans / n_ans_for_abstain, 3)
+                               if (is_confident is not None and n_ans_for_abstain) else None),
+        "abstain_scored": (n_unanswerable if is_confident is not None else 0),
         "rows": rows,
     }
 
@@ -169,5 +221,6 @@ def load_gold(path: str) -> list:
                 gold_sections=set(d.get("gold_sections", [])),
                 answer_phrases=d.get("answer_phrases", []), kind=d.get("kind", ""),
                 gold_doc_id=d.get("doc_id", ""),
+                expected_items=d.get("expected_items", []),
             ))
     return items

@@ -66,6 +66,7 @@ def load_parsed(doc_dir: str) -> ParsedDoc | None:
 
 def _from_dict(d: dict) -> ParsedDoc:
     blocks = [Block(id=b["id"], kind=b["kind"], text=b["text"], page=b["page"],
+                    printed_page=b.get("printed_page"),
                     section_path=tuple(b.get("section_path") or ()), order=b.get("order", 0),
                     confidence=b.get("confidence", 1.0), meta=b.get("meta") or {})
               for b in d.get("blocks", [])]

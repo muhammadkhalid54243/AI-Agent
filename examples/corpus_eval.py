@@ -29,6 +29,7 @@ GOLD = {
     "SHR 2023": ["docs/gold/2023_SHR_English.jsonl"],
     "FFM police custody": ["docs/gold/FFM_police_custody.jsonl"],
     "Thematic Article 9A": ["docs/gold/2025_Article9A_thematic.jsonl"],
+    "Exhaustive (enum)": ["docs/gold/exhaustive_english.jsonl"],
 }
 
 
@@ -42,17 +43,32 @@ def main() -> None:
     cr = CorpusRetriever(docs, scorer=scorer)
     print(f"Corpus: {', '.join(cr.doc_label(d.doc_id) for d in docs)}"
           f"{' [rerank]' if rerank else ''}\n")
-    hdr = f"{'gold set':22} {'n':>3}  r@5    r@20   MRR    ans    doc_attr"
+    hdr = f"{'gold set':22} {'n':>3} {'exh':>3}  r@5    r@20   MRR    doc_attr  comp@8"
     print(hdr)
     print("-" * len(hdr))
     for label, paths in GOLD.items():
         gold = []
         for p in paths:
             gold += load_gold(p)
-        res = score_retrieval(lambda q, k: cr._search(q, k), gold)
-        print(f"{label:22} {res['n']:>3}  {str(res['recall']['@5']):<6} "
-              f"{str(res['recall']['@20']):<6} {str(res['mrr']):<6} "
-              f"{str(res['answer_hit_rate']):<6} {res['doc_attribution']}")
+        res = score_retrieval(lambda q, k: cr.retrieve(q, k), gold)      # the product path
+        comp = res["completeness"]
+        print(f"{label:22} {res['n']:>3} {res['completeness_scored']:>3}  "
+              f"{str(res['recall']['@5']):<6} {str(res['recall']['@20']):<6} "
+              f"{str(res['mrr']):<6} {str(res['doc_attribution']):<8}  "
+              f"{comp if comp is not None else '-'}")
+
+    # Enumeration before/after at the product depth: _search (pre-D) vs retrieve (dispatch).
+    ex = []
+    for p in GOLD["Exhaustive (enum)"]:
+        ex += load_gold(p)
+    base = score_retrieval(lambda q, k: cr._search(q, k), ex)
+    disp = score_retrieval(lambda q, k: cr.retrieve(q, k), ex)
+    print(f"\nEnumeration completeness@8  baseline(_search)={base['completeness']}  "
+          f"dispatch(retrieve)={disp['completeness']}")
+    for b, d in zip(base["rows"], disp["rows"]):
+        if b.get("kind") == "exhaustive":
+            print(f"    - {b['id']:22} _search={b['completeness']:<5} -> retrieve={d['completeness']:<5} "
+                  f"(ctx chunks {b['context_chunks']} -> {d['context_chunks']})")
 
 
 if __name__ == "__main__":

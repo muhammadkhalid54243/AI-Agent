@@ -27,4 +27,9 @@ def rerank(query: str, hits: list, k: int, *, scorer=None) -> list:
     except Exception:
         return hits[:k]                       # degrade to input order, never abort
     order = sorted(range(len(hits)), key=lambda i: scores[i], reverse=True)
-    return [hits[i] for i in order[:k]]
+    out = []
+    for i in order[:k]:
+        h = dict(hits[i])
+        h["rerank_score"] = float(scores[i])  # cross-encoder relevance — the gate prefers this
+        out.append(h)
+    return out

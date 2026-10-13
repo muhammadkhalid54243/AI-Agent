@@ -63,3 +63,50 @@ def test_doc_label_reads_as_report_year():
 
 def test_merged_glossary_available():
     assert _corpus().glossary["HRCP"].expansion == "Human Rights Commission of Pakistan"
+
+
+# --- Phase D: query-shape dispatch (get_section / get_table / retrieve) ---
+
+def _list_doc() -> ParsedDoc:
+    """A doc whose 'Rights' section has 5 items long enough to split into several leaf
+    chunks (so returning the whole section beats a small top-k), plus one table."""
+    filler = "Everyone is entitled to it and its full protection under the law. " * 20
+    blocks = [Block(id="D:p0:b0", kind="heading", text="Rights", page=0, section_path=())]
+    for i, name in enumerate(["alpha", "bravo", "charlie", "delta", "echo"]):
+        blocks.append(Block(id=f"D:p0:b{i+1}", kind="paragraph",
+                            text=f"The right to {name}. {filler}",
+                            page=0, section_path=("Rights",)))
+    blocks.append(Block(id="D:p1:bt0", kind="table",
+                        text="|City|Count|\n|---|---|\n|Lahore|5|\n|Karachi|9|",
+                        page=1, section_path=("Crime data",)))
+    return ParsedDoc(doc_id="D", source_path="d.pdf", checksum="c", profile="report",
+                     blocks=blocks, coverage=Coverage(blocks_extracted=len(blocks)),
+                     outline=[OutlineNode(1, "Rights", 0), OutlineNode(1, "Crime data", 1)])
+
+
+def _list_corpus() -> CorpusRetriever:
+    return CorpusRetriever([_list_doc()], embeddings=DeterministicFakeEmbedding(size=32))
+
+
+def test_get_section_returns_whole_section_as_multiple_leaves():
+    hits = _list_corpus().get_section("D", "Rights")
+    blob = " ".join(h["text"] for h in hits)
+    assert all(name in blob for name in ["alpha", "bravo", "charlie", "delta", "echo"])
+    assert len(hits) >= 3                       # the section really did span several leaves
+
+
+def test_retrieve_dispatches_enumerate_to_the_whole_section():
+    # k=1 would give ONE chunk via _search; the enumerate dispatch returns the whole section.
+    hits = _list_corpus().retrieve("list every right entitled protection", 1)
+    blob = " ".join(h["text"] for h in hits)
+    assert all(name in blob for name in ["alpha", "bravo", "charlie", "delta", "echo"])
+
+
+def test_retrieve_fact_query_honors_k():
+    hits = _list_corpus().retrieve("how many rights entitled protection", 2)
+    assert len(hits) <= 2                        # fact path is the ordinary top-k search
+
+
+def test_get_table_returns_verbatim():
+    hits = _list_corpus().get_table("D", "City")
+    assert hits and "|City|Count|" in hits[0]["text"] and "Karachi|9" in hits[0]["text"]

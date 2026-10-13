@@ -40,15 +40,31 @@ class HybridIndex:
         self._rrf_k = rrf_k
 
     def retrieve(self, query: str, k: int, *, candidates: int = 100) -> list:
-        """Retrieve `candidates` from each channel, RRF-fuse, return the top `k` hits."""
-        dense_ids = [h["chunk_id"] for h in self._dense.retrieve(query, candidates)]
+        """Retrieve `candidates` from each channel, RRF-fuse, return the top `k` hits.
+
+        Each returned hit also carries its raw channel scores — `dense_score` (cosine, None
+        if the chunk was BM25-only and never surfaced densely) and `bm25_score` — so the
+        confidence gate upstream has an absolute signal to threshold. RRF itself is rank-only
+        and tells you nothing about how good the top hit actually is.
+        """
+        dense_hits = self._dense.retrieve(query, candidates)
+        dense_ids = [h["chunk_id"] for h in dense_hits]
+        dense_score = {h["chunk_id"]: h.get("dense_score") for h in dense_hits}
         scores = self._bm25.get_scores(_tok(query))
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:candidates]
         bm25_ids = [self._ids[i] for i in ranked]
+        bm25_score = {self._ids[i]: float(scores[i]) for i in ranked}
         fused = reciprocal_rank_fusion([dense_ids, bm25_ids], self._rrf_k)[:k]
-        return [self._hit(i) for i in fused]
+        out = []
+        for cid in fused:
+            h = self._hit(cid)
+            h["dense_score"] = dense_score.get(cid)
+            h["bm25_score"] = bm25_score.get(cid)
+            out.append(h)
+        return out
 
     def _hit(self, cid: str) -> dict:
         c = self._by_id[cid]
-        return {"text": c.text, "page": c.page_start, "section_path": list(c.section_path),
-                "chunk_id": c.id, "kind": c.kind, "doc_id": c.doc_id}
+        return {"text": c.text, "page": c.page_start, "printed_page": c.printed_page_start,
+                "section_path": list(c.section_path), "chunk_id": c.id, "kind": c.kind,
+                "doc_id": c.doc_id}

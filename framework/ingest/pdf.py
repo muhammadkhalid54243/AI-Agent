@@ -34,6 +34,44 @@ def _norm(text: str) -> str:
     return re.sub(r"\d+", "", text).lower().strip()
 
 
+def _ints(text: str) -> list:
+    """Integer digit-runs in `text` — page-number / year candidates from furniture."""
+    return [int(m) for m in re.findall(r"\d+", text)]
+
+
+def _fit_printed_offset(header_nums: dict) -> dict:
+    """PDF page index -> PRINTED page number, recovered from furniture (headers/footers).
+
+    Headers carry BOTH a page number (near the pdf index) and a constant year (~2000
+    away). We first find the modal offset `printed - pdf_index` to tell them apart, then
+    assign EACH page the header number closest to that offset — per-page, so a mid-document
+    offset DRIFT (blank/full-page images inserted in the PDF but not in the printed
+    numbering) still yields each page's own true number instead of one contiguous band.
+    Pages whose header held no page number (year-only, blanks, roman front matter) are
+    absent from the result, so their citation falls back to the PDF index.
+    """
+    from collections import Counter
+    # Candidate offsets per page, with the year rejected by magnitude.
+    cand = {pg: [n - pg for n in nums if abs(n - pg) <= 100] for pg, nums in header_nums.items()}
+    if not any(cand.values()):
+        return {}
+    pages = sorted(cand)
+    window = 6                               # pages each side for the LOCAL offset vote
+    printed = {}
+    for pg in pages:
+        local = Counter(o for q in pages if abs(q - pg) <= window for o in cand[q])
+        if not local:
+            continue
+        best_off, support = local.most_common(1)[0]
+        if support < 2:                      # need agreement from neighbours, not one stray number
+            continue
+        for n in header_nums[pg]:            # assign this page's OWN number matching the local offset
+            if n - pg == best_off:
+                printed[pg] = n
+                break
+    return printed
+
+
 # Fraction of a block's non-space chars that fall in the Unicode Private Use Area
 # (U+E000–U+F8FF). High = the font has no ToUnicode map and we got glyph IDs, not
 # text (broken-font / Urdu Nastaliq PDFs). This is the garbage the ledger must catch.
@@ -153,6 +191,14 @@ def extract_blocks(doc_id: str, path: str) -> tuple:
 
     furniture = {t for t, pages in norm_pages.items() if len(pages) >= FURNITURE_MIN_PAGES}
 
+    # Recover the PRINTED page number from the furniture we're about to drop: collect each
+    # page's header/footer digit-runs, then fit a constant offset (page number vs year).
+    header_nums = {}
+    for c in candidates:
+        if c["kind"] is None and _norm(c["text"]) in furniture:
+            header_nums.setdefault(c["page"], []).extend(_ints(c["text"]))
+    printed_by_page = _fit_printed_offset(header_nums)
+
     # Pass 2: drop furniture, classify prose, keep tables atomic, assign reading order.
     blocks = []
     order = 0
@@ -168,12 +214,17 @@ def extract_blocks(doc_id: str, path: str) -> tuple:
             kind = "heading" if body_size and c["size"] >= body_size * HEADING_RATIO else "paragraph"
         conf = round(1.0 - _pua_ratio(c["text"]), 2)
         blocks.append(Block(id=f"{doc_id}:p{c['page']}:b{c['idx']}", kind=kind,
-                            text=c["text"], page=c["page"], order=order,
-                            confidence=conf, meta=meta))
+                            text=c["text"], page=c["page"],
+                            printed_page=printed_by_page.get(c["page"]),
+                            order=order, confidence=conf, meta=meta))
         order += 1
 
+    block_pages = {b.page for b in blocks}
+    printed_fallback = sorted(p for p in block_pages if p not in printed_by_page)
     page_stats = {"pages_total": doc.page_count, "pages_with_text": pages_with_text,
                   "pages_failed": pages_failed, "pages_low_quality": pages_low_quality,
                   "body_size": body_size, "furniture_removed": len(furniture),
-                  "tables_found": tables_found}
+                  "tables_found": tables_found,
+                  "pages_printed_recovered": len(block_pages) - len(printed_fallback),
+                  "pages_printed_fallback": printed_fallback}
     return blocks, page_stats

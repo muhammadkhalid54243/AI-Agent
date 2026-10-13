@@ -19,7 +19,8 @@ class Block:
     id: str                          # f"{doc_id}:p{page}:b{n}" — unit of coverage accounting
     kind: BlockKind
     text: str                        # Markdown
-    page: int                        # PDF page INDEX (0-based); printed page lives in meta
+    page: int                        # PDF page INDEX (0-based) — the RETRIEVAL key
+    printed_page: int | None = None  # the number PRINTED on the page (for CITATIONS); None = fallback
     section_path: tuple = ()         # ("4. Transmission", "4.2 Losses")
     order: int = 0                   # document reading order
     confidence: float = 1.0          # extraction confidence; low → flagged in coverage
@@ -65,6 +66,8 @@ class Coverage:
     tables_split: int = 0                # exceeded max_tokens and were row-split
     orphan_blocks: list = field(default_factory=list)     # extracted but never indexed. MUST be empty.
     pages_low_quality: list = field(default_factory=list)  # text extracted but mostly unmapped glyphs
+    pages_printed_recovered: int = 0     # pages whose PRINTED page number was recovered from headers
+    pages_printed_fallback: list = field(default_factory=list)  # pages citing PDF index (no printed #)
     glossary_terms: int = 0
     temporal_anchors: int = 0
     warnings: list = field(default_factory=list)
@@ -86,6 +89,8 @@ class Coverage:
             f"- blocks extracted: {self.blocks_extracted}"
             f" ({len(self.blocks_low_confidence)} low-confidence)",
             f"- tables: {self.tables_found} found, {self.tables_split} row-split",
+            f"- printed page numbers: {self.pages_printed_recovered} recovered, "
+            f"{len(self.pages_printed_fallback)} fallback (cite PDF index)",
             f"- glossary terms: {self.glossary_terms} | temporal anchors: {self.temporal_anchors}",
             f"- ORPHAN BLOCKS: {len(self.orphan_blocks)}"
             + ("  ← MUST be 0" if self.orphan_blocks else "  ✓"),

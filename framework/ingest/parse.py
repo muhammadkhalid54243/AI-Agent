@@ -74,6 +74,8 @@ def ingest(path: str, *, out_dir: str | None = None, write: bool = True, transcr
         tables_found=stats.get("tables_found", 0),
         pages_low_quality=stats.get("pages_low_quality", []),
         pages_via_vision=stats.get("pages_via_vision", 0),
+        pages_printed_recovered=stats.get("pages_printed_recovered", 0),
+        pages_printed_fallback=stats.get("pages_printed_fallback", []),
         glossary_terms=len(glossary),
     )
     if stats["pages_failed"]:
