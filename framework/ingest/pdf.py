@@ -98,6 +98,53 @@ def _block_size(bdict: dict) -> float:
     return max(sizes) if sizes else 0.0
 
 
+def _line_text(line: dict) -> str:
+    return "".join(s.get("text", "") for s in line.get("spans", [])).strip()
+
+
+def _line_size(line: dict) -> float:
+    return max((s.get("size", 0) for s in line.get("spans", [])), default=0.0)
+
+
+def _union_bbox(boxes: list) -> tuple:
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        return (0.0, 0.0, 0.0, 0.0)
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def split_heading_prefix(bdict: dict, body_size: float, ratio: float = HEADING_RATIO) -> list:
+    """Split a text block at the boundary between a LEADING run of heading-sized lines and
+    a smaller remainder. Returns [(text, size, bbox), ...].
+
+    A PyMuPDF text block sometimes groups a heading-sized title line with the smaller lines
+    that follow it (e.g. a section title stacked above its first label/paragraph). Left whole,
+    `_block_text` concatenates both into one wrong heading and `_block_size` (the max) marks the
+    whole thing a heading — which is exactly how the UDHR appendix became a section misnamed
+    "Universal Declaration of Human Rights Article 1". Splitting off the heading-sized prefix
+    gives the title its own heading and keeps the remainder as body — no text dropped.
+
+    Only the bug shape splits: a block whose first line(s) are heading-sized AND which has
+    smaller lines after. All-heading blocks (genuine multi-line headings) and blocks with no
+    leading heading line (ordinary paragraphs) return a single group — today's behaviour.
+    """
+    lines = [ln for ln in bdict.get("lines", []) if _line_text(ln)]
+    if len(lines) <= 1 or not body_size:
+        return [(_block_text(bdict), _block_size(bdict), bdict.get("bbox"))]
+    thresh = body_size * ratio
+    i = 0
+    while i < len(lines) and _line_size(lines[i]) >= thresh:
+        i += 1
+    groups = [lines[:i], lines[i:]] if 0 < i < len(lines) else [lines]
+    out = []
+    for g in groups:
+        text = " ".join(_line_text(ln) for ln in g).strip()
+        size = max(_line_size(ln) for ln in g)
+        out.append((text, size, _union_bbox([ln.get("bbox") for ln in g])))
+    return out
+
+
 def _is_two_column(boxes: list, page_width: float) -> bool:
     """True if blocks clearly populate both halves of the page (a two-column layout)."""
     mid = page_width / 2
@@ -164,8 +211,11 @@ def extract_blocks(doc_id: str, path: str) -> tuple:
         for j, b in enumerate(raw):
             if _inside_any(_center(b["bbox"]), tboxes):     # part of a table → dedup out
                 continue
-            page_cands.append({"idx": str(j), "kind": None, "text": _block_text(b),
-                               "size": _block_size(b), "bbox": b["bbox"]})
+            # Split a title-merged block (heading prefix + smaller remainder) into separate
+            # candidates; most blocks yield exactly one. Split pieces get unique ids (b{j}, b{j}s1).
+            for k, (text, size, bbox) in enumerate(split_heading_prefix(b, body_size)):
+                page_cands.append({"idx": str(j) if k == 0 else f"{j}s{k}", "kind": None,
+                                   "text": text, "size": size, "bbox": bbox})
         text_pairs = [(_block_text(b), b["bbox"]) for b in raw]
         for k, t in enumerate(tables):
             page_cands.append({"idx": f"t{k}", "kind": "table", "text": t["markdown"],

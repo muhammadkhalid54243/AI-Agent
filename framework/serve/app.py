@@ -71,15 +71,18 @@ RAG_SYS = (
     "You answer questions about HRCP human-rights reports using ONLY the passages below. "
     "Each passage begins with its source line: Report — Section, pN.\n"
     "Rules:\n"
-    "- Put each distinct fact on its OWN line.\n"
-    "- After each fact, cite its source copied from that passage's source line in brackets — "
-    "[Report — Section, pN], e.g. [SHR 2024 — Key issues, p18] — then, on the next line, the "
-    "exact sentence from the passage that the fact rests on, in quotes. Copy that sentence "
-    "WORD FOR WORD from the passage; do not paraphrase or shorten it. Never cite a bare "
-    "passage number like [3].\n"
-    "- These reports are yearly, so the same figure differs across years. When more than "
-    "one report or year is relevant, give EACH on its own line with its own citation and "
-    "quote — never merge them into one number or silently pick just one year.\n"
+    "- Put each distinct fact on its OWN line, then its citation in brackets copied from that "
+    "passage's source line — [Report — Section, pN], e.g. [SHR 2024 — Key issues, p18] — then, "
+    "on the NEXT line, the exact sentence from the passage it rests on, in quotes, copied WORD "
+    "FOR WORD (never paraphrased). Never cite a bare passage number like [3].\n"
+    "- Leave a BLANK LINE between cited answers, so each fact + citation + quote is its own "
+    "paragraph and the next one starts on a new line (not run onto the same line).\n"
+    "- If the SAME statement appears in more than one report with the same wording (e.g. a "
+    "declaration or law reproduced across years), give it ONCE and COMBINE the sources in a "
+    "single citation — [SHR 2023; SHR 2024 — Section, pN]. Do NOT repeat the same text per report.\n"
+    "- But when reports give DIFFERENT values for the same thing (a figure that changes by year), "
+    "keep EACH on its own line with its own citation and quote — never merge differing numbers or "
+    "silently pick just one year.\n"
     "- Use ONLY what the passages state; add nothing and never guess. If the passages do "
     "not contain a specific detail asked for, give what they DO state and omit the rest — "
     "the decision about whether the reports cover the question has already been made for "
@@ -222,14 +225,36 @@ def _condense(model, history: str, question: str) -> str:
         return question
 
 
+def _claim_key(claim: str) -> str:
+    """Normalized key for de-duping identical statements (case/space/trailing-punct-insensitive)."""
+    import re
+    return re.sub(r"\s+", " ", (claim or "")).strip().strip(".;:,").lower()
+
+
 def _render_claims(claims: list) -> str:
-    """Rebuild an answer from verified claims: fact + citation, then its segment quote."""
-    lines = []
+    """Rebuild an answer from verified claims. Identical statements supported by more than one
+    report are MERGED — stated once with their sources combined — so repeated text (the UDHR, a
+    reproduced law) isn't duplicated. Each cited answer is its OWN paragraph (blank line between),
+    with the segment quote on its own line beneath the fact."""
+    order, groups = [], {}
     for c in claims:
-        lines.append(f"{c['claim']} [{c['cited_source']}]")
-        if c.get("supporting_quote"):
-            lines.append(f'    "{c["supporting_quote"]}"')
-    return "\n".join(lines)
+        key = _claim_key(c.get("claim", ""))
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"claim": c.get("claim", ""), "sources": [],
+                               "quote": c.get("supporting_quote") or ""}
+            order.append(key)
+        src = c.get("cited_source") or ""
+        if src and src not in g["sources"]:          # merge sources, order-preserving, de-duped
+            g["sources"].append(src)
+        if not g["quote"] and c.get("supporting_quote"):
+            g["quote"] = c["supporting_quote"]
+    blocks = []
+    for key in order:
+        g = groups[key]
+        head = f"{g['claim']} [{'; '.join(g['sources'])}]" if g["sources"] else g["claim"]
+        blocks.append(head + (f'  \n"{g["quote"]}"' if g["quote"] else ""))  # quote on its own line
+    return "\n\n".join(blocks)                        # blank line between cited answers
 
 
 def _verify(st: dict, question: str, answer: str, passages: list) -> str:

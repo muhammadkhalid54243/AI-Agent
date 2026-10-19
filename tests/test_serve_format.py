@@ -153,6 +153,34 @@ def test_render_claims_shows_fact_citation_and_segment_quote():
          "supporting_quote": "6,161 prisoners were on death row."}])
     assert "6,161 were on death row [SHR 2024 — Key issues, p18]" in out
     assert '"6,161 prisoners were on death row."' in out
+    assert '\n"6,161 prisoners were on death row."' in out    # quote on its OWN line
+
+
+def test_render_merges_identical_statement_across_reports():
+    # Same text reproduced in two reports -> stated ONCE, citations combined (not duplicated).
+    out = serve_app._render_claims([
+        {"claim": "Everyone is born free and equal in dignity and rights.",
+         "cited_source": "SHR 2023 — UDHR, p353", "supporting_quote": "All human beings are born free"},
+        {"claim": "Everyone is born free and equal in dignity and rights.",
+         "cited_source": "SHR 2024 — UDHR, p350", "supporting_quote": "All human beings are born free"},
+    ])
+    assert out.count("Everyone is born free and equal in dignity and rights.") == 1   # stated once
+    assert "SHR 2023 — UDHR, p353; SHR 2024 — UDHR, p350" in out                      # merged sources
+
+
+def test_render_separates_cited_answers_with_a_blank_line():
+    out = serve_app._render_claims([
+        {"claim": "A", "cited_source": "SHR 2024 — s, p1", "supporting_quote": "qa"},
+        {"claim": "B", "cited_source": "SHR 2023 — s, p2", "supporting_quote": "qb"},
+    ])
+    assert "\n\n" in out                                   # paragraph break between answers
+    assert out.index("A [") < out.index("\n\n") < out.index("B [")
+
+
+def test_prompt_instructs_dedup_and_paragraph_separation():
+    p = _prompt("q", _context("q", {"retriever": _FakeRetriever()}))
+    assert "combine the sources" in p.lower()              # dedup rule present
+    assert "blank line" in p.lower()                       # one-paragraph-per-answer rule present
 
 
 def test_verify_drops_ungrounded_claims(monkeypatch):
