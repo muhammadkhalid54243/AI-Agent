@@ -62,7 +62,24 @@ def ingest(path: str, *, out_dir: str | None = None, write: bool = True, transcr
         raise NotImplementedError(
             f"profile {profile!r} not handled yet (office/plaintext land in a later step)")
 
-    outline, blocks = build_outline_and_sections(blocks)
+    # SHR structural overlay: when this is an SHR annual, the CHAPTER (TOC + vertical margin)
+    # becomes the authoritative top of section_path. Other docs fall back to the generic font path.
+    from framework.ingest import shr
+    chapter_by_page = None
+    shr_year = None
+    if profile in _TEXT_PDF_PROFILES:
+        try:
+            fm = shr.front_matter(path)
+            if shr.is_shr_annual(fm, stats.get("vmargin_by_page", {})):
+                shr_year = fm.get("year")
+                chapter_by_page = shr.assign_chapters(
+                    stats.get("vmargin_by_page", {}), fm["toc_entries"],
+                    stats.get("printed_by_page", {}), stats["pages_total"],
+                    shr.chapter_aliases(fm["toc_entries"]))
+        except Exception:
+            chapter_by_page = None            # never let structural analysis break ingestion
+
+    outline, blocks = build_outline_and_sections(blocks, chapter_by_page=chapter_by_page)
     glossary = harvest_glossary(blocks)
 
     coverage = Coverage(

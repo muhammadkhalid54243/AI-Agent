@@ -17,7 +17,7 @@ class ChunkIndex:
         leaves = leaf_chunks(chunks)
         texts = [c.embed_text for c in leaves]
         metadatas = [{"chunk_id": c.id, "page_start": c.page_start, "page_end": c.page_end,
-                      "printed_page": c.printed_page_start,
+                      "printed_page": c.printed_page_start, "chapter": c.chapter,
                       "section_path": list(c.section_path), "kind": c.kind, "text": c.text}
                      for c in leaves]
         self.n_indexed = len(leaves)
@@ -35,4 +35,5 @@ class ChunkIndex:
                  "section_path": h.metadata.get("section_path"),
                  "chunk_id": h.metadata.get("chunk_id"),
                  "kind": h.metadata.get("kind"),
+                 "chapter": h.metadata.get("chapter"),
                  "dense_score": score} for h, score in pairs]

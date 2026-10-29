@@ -60,7 +60,7 @@ def _chunk_hit(c) -> dict:
     """Hit dict for a chunk — same shape as HybridIndex._hit (the structure-tool path)."""
     return {"text": c.text, "page": c.page_start, "printed_page": c.printed_page_start,
             "section_path": list(c.section_path), "chunk_id": c.id, "kind": c.kind,
-            "doc_id": c.doc_id}
+            "doc_id": c.doc_id, "chapter": c.chapter}
 
 
 def _label(doc) -> str:

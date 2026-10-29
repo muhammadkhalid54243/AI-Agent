@@ -75,7 +75,7 @@ agent.add_tools(load_mcp_tools({"dir": {...}}))            # tools discovered ov
 | 💸 **Spend cap** | `framework.middleware` | model-call limit per run |
 | ♻️ **Resilience** | `framework.middleware` | retry with exponential backoff |
 | 📐 **Structured output** | `framework.structured` | native `with_structured_output` + Pydantic validation |
-| 🔭 **Observability** | `framework.observability` | callback tracer → `run_traced()` returns a full trajectory |
+| 🔭 **Observability** | `framework.observability` | callback tracer → `run_traced()` returns a full trajectory; **OpenTelemetry response tracing** (`tracing.py`) spans the served RAG pipeline — see below |
 | 📚 **RAG** | `framework.rag` | vector store → retriever exposed as a tool |
 | 🔗 **MCP** | `framework.mcp` | discover & call tools over the Model Context Protocol |
 | 🎭 **Orchestration** | `framework.orchestration` | sub-agents-as-tools + a supervisor |
@@ -116,6 +116,20 @@ uv run python examples/demo.py
 ```bash
 uv run pytest -q            # unit tests always; live tests run when a key is set
 ```
+
+**6. (Optional) Response tracing with OpenTelemetry** — see each request as a trace
+(`rag_answer → condense → retrieve → generate → parse → verify`) with per-stage latency and
+attributes (n_hits, confidence, abstained, tokens). Off by default; self-hosted, nothing leaves
+your machine. Quickest view is a local Jaeger:
+
+```bash
+docker run -d --name jaeger -e COLLECTOR_OTLP_ENABLED=true -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest
+TRACE_BACKEND=otel OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 uv run python serve.py
+# ask a question, then open the Jaeger UI at http://localhost:16686
+```
+
+With no `OTEL_EXPORTER_OTLP_ENDPOINT`, spans print to the console instead. Sensitive text payloads
+(question/answer/quote) are redacted unless `TRACE_PAYLOADS=1`. See `.env.example` for all knobs.
 
 ---
 

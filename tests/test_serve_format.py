@@ -151,9 +151,8 @@ def test_render_claims_shows_fact_citation_and_segment_quote():
     out = serve_app._render_claims([
         {"claim": "6,161 were on death row", "cited_source": "SHR 2024 — Key issues, p18",
          "supporting_quote": "6,161 prisoners were on death row."}])
-    assert "6,161 were on death row [SHR 2024 — Key issues, p18]" in out
-    assert '"6,161 prisoners were on death row."' in out
-    assert '\n"6,161 prisoners were on death row."' in out    # quote on its OWN line
+    assert "- 6,161 were on death row [SHR 2024 — Key issues, p18]" in out   # bulleted
+    assert '\n  "6,161 prisoners were on death row."' in out                 # quote on its OWN line
 
 
 def test_render_merges_identical_statement_across_reports():
@@ -192,6 +191,19 @@ def test_verify_drops_ungrounded_claims(monkeypatch):
     out = serve_app._verify({"model": None}, "q", "A. B.", ["passage"])
     assert "A [SHR 2024 — s, p1]" in out
     assert "B [" not in out                        # ungrounded claim dropped
+
+
+def test_used_chunk_ids_matches_only_cited_hits():
+    r = _FakeRetriever()                                 # doc_label: 2024_SHR_English -> "SHR 2024"
+    hits = [
+        {"chunk_id": "c1", "doc_id": "2024_SHR_English", "printed_page": 22},
+        {"chunk_id": "c2", "doc_id": "2023_SHR_English", "printed_page": 20},
+        {"chunk_id": "c3", "doc_id": "2024_SHR_English", "printed_page": 220},  # retrieved, not cited
+    ]
+    answer = ("- Fact A [SHR 2024 — Key issues, p22]\n"
+              "- Fact B [SHR 2023 — Key issues, p20]")
+    used = serve_app._used_chunk_ids(answer, r, hits)
+    assert used == ["c1", "c2"]                          # c3 excluded; p22 must not match p220
 
 
 def test_verify_abstains_when_nothing_is_grounded(monkeypatch):

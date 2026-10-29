@@ -114,6 +114,17 @@ def _union_bbox(boxes: list) -> tuple:
             max(b[2] for b in boxes), max(b[3] for b in boxes))
 
 
+def _is_vertical(bdict: dict) -> bool:
+    """A block whose text is written vertically (rotated 90°) — in the SHR reports this is the
+    chapter name printed down the side margin. PyMuPDF marks each line's writing direction in
+    `dir`: horizontal is (1,0), vertical ≈ (0,±1)."""
+    for ln in bdict.get("lines", []):
+        if ln.get("spans"):
+            dx, _ = ln.get("dir", (1, 0))
+            return abs(dx) < 0.5
+    return False
+
+
 def split_heading_prefix(bdict: dict, body_size: float, ratio: float = HEADING_RATIO) -> list:
     """Split a text block at the boundary between a LEADING run of heading-sized lines and
     a smaller remainder. Returns [(text, size, bbox), ...].
@@ -198,6 +209,7 @@ def extract_blocks(doc_id: str, path: str) -> tuple:
     pages_with_text = 0
     norm_pages = {}
     tables_found = 0
+    vmargin_by_page = {}          # pno -> chapter name printed vertically in the side margin
     for pno, d in enumerate(per_page):
         if d is None:
             pages_failed.append(pno)
@@ -206,6 +218,14 @@ def extract_blocks(doc_id: str, path: str) -> tuple:
         tables = extract_page_tables(page)
         tboxes = [t["bbox"] for t in tables]
         raw = [b for b in d.get("blocks", []) if b.get("type") == 0 and _block_text(b)]
+
+        # Harvest the vertical side-margin chapter label (read-only) — do NOT remove these blocks
+        # from the pipeline: they stay furniture/heading exactly as before, so section_path and
+        # embed_text are unchanged and retrieval is unaffected. The chapter rides as metadata only.
+        vblocks = [b for b in raw if _is_vertical(b)]
+        if vblocks:
+            vtext = max((_block_text(b) for b in vblocks), key=len)
+            vmargin_by_page[pno] = re.sub(r"\s+", " ", vtext).strip()
 
         page_cands = []
         for j, b in enumerate(raw):
@@ -276,5 +296,7 @@ def extract_blocks(doc_id: str, path: str) -> tuple:
                   "body_size": body_size, "furniture_removed": len(furniture),
                   "tables_found": tables_found,
                   "pages_printed_recovered": len(block_pages) - len(printed_fallback),
-                  "pages_printed_fallback": printed_fallback}
+                  "pages_printed_fallback": printed_fallback,
+                  "vmargin_by_page": vmargin_by_page,
+                  "printed_by_page": printed_by_page}
     return blocks, page_stats

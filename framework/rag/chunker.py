@@ -37,6 +37,7 @@ class Chunk:
     printed_page_start: int | None = None  # PRINTED page of page_start (citation); None = fallback
     section_path: tuple = ()
     kind: str = "prose"          # "prose" | "table"
+    chapter: str | None = None   # SHR structural chapter (TOC/margin) — for citation + filtering
     parent_id: str | None = None  # set on children; None on parents and lone leaves
     block_ids: list = field(default_factory=list)  # coverage join key (Block ids consumed)
 
@@ -72,6 +73,7 @@ def structure_aware_chunks(doc, *, child_target: int = 200, child_max: int = 320
     chunks = []
     consumed = set()
     printed = {b.page: b.printed_page for b in doc.blocks}   # PDF page -> printed page number
+    chapter = {b.page: b.meta.get("chapter") for b in doc.blocks}  # PDF page -> SHR chapter
     n = 0
 
     def mk(text, kind, page_start, page_end, section_path, parent_id, block_ids):
@@ -79,7 +81,8 @@ def structure_aware_chunks(doc, *, child_target: int = 200, child_max: int = 320
         c = Chunk(id=f"{doc.doc_id}:ck{n}", text=text, embed_text=text, doc_id=doc.doc_id,
                   page_start=page_start, page_end=page_end,
                   printed_page_start=printed.get(page_start), section_path=tuple(section_path),
-                  kind=kind, parent_id=parent_id, block_ids=list(block_ids))
+                  kind=kind, chapter=chapter.get(page_start), parent_id=parent_id,
+                  block_ids=list(block_ids))
         n += 1
         consumed.update(block_ids)
         chunks.append(c)

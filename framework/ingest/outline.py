@@ -21,11 +21,18 @@ def _level_map(headings: list) -> dict:
     return {s: min(i + 1, MAX_LEVELS) for i, s in enumerate(sizes)}
 
 
-def build_outline_and_sections(blocks: list) -> tuple:
+def build_outline_and_sections(blocks: list, chapter_by_page: dict | None = None) -> tuple:
     """Return (outline, blocks_with_section_path).
 
-    Headings get their ancestor path (excluding themselves); other blocks get the
-    full enclosing path. Blocks are frozen, so we return new ones via replace().
+    Headings get their ancestor path (excluding themselves); other blocks get the full enclosing
+    path. Blocks are frozen, so we return new ones via replace().
+
+    When `chapter_by_page` is given (SHR structural path), the page's CHAPTER (from the TOC +
+    vertical margin, see shr.py) is stamped on each block as `meta["chapter"]` — a SEPARATE level
+    used for CITATIONS and query filtering. `section_path` is computed EXACTLY as without it, so
+    `embed_text` (which `section_path` feeds) is byte-for-byte unchanged and retrieval is unaffected
+    — chapter correctness is decoupled from the embedding (measured: prepending or reshaping
+    `section_path` regressed SHR 2024 recall; stamping chapter as metadata does not).
     """
     headings = [b for b in blocks if b.kind == "heading"]
     lmap = _level_map(headings)
@@ -33,7 +40,12 @@ def build_outline_and_sections(blocks: list) -> tuple:
     stack = []          # [(level, title)]
     out_blocks = []
 
+    def _finish(b, ch, sect):
+        meta = {**b.meta, "chapter": ch} if ch else b.meta
+        return dataclasses.replace(b, section_path=sect, meta=meta)
+
     for b in blocks:
+        ch = chapter_by_page.get(b.page) if chapter_by_page else None
         if b.kind == "heading":
             lvl = lmap.get(round(b.meta.get("font_size", 0), 1), MAX_LEVELS)
             while stack and stack[-1][0] >= lvl:   # pop siblings/deeper
@@ -41,8 +53,8 @@ def build_outline_and_sections(blocks: list) -> tuple:
             ancestors = tuple(t for _, t in stack)
             outline.append(OutlineNode(level=lvl, title=b.text, page=b.page))
             stack.append((lvl, b.text))
-            out_blocks.append(dataclasses.replace(b, section_path=ancestors))
+            out_blocks.append(_finish(b, ch, ancestors))
         else:
-            out_blocks.append(dataclasses.replace(b, section_path=tuple(t for _, t in stack)))
+            out_blocks.append(_finish(b, ch, tuple(t for _, t in stack)))
 
     return outline, out_blocks

@@ -31,8 +31,10 @@ from framework import Agent
 from framework.memory import checkpoint
 from framework.middleware import resilience, ApprovalRequired
 from framework.middleware.guardrails import guardrails
+from framework.observability import tracing
 from framework.rag.corpus import MIN_DENSE as _MIN_DENSE, MIN_RERANK as _MIN_RERANK
 from framework.serve.history import History
+from framework.structured.answer_parser import CitedAnswerParser, render_units
 from framework.tools import get_weather, calculate
 from framework.serve.ui import INDEX_HTML
 
@@ -91,6 +93,7 @@ RAG_SYS = (
 
 _state = None
 HISTORY = History()
+_PARSER = CitedAnswerParser()     # formats every answer into the bullet-list shape, deterministically
 
 
 def _resolve_doc_paths() -> list:
@@ -180,10 +183,18 @@ def _page(h: dict) -> str:
     return f"p{pp}" if pp is not None else f"PDF p{h['page']}"
 
 
+def _loc(h: dict) -> str:
+    """Where a hit lives, for the citation. SHR docs carry an authoritative CHAPTER (from the TOC
+    + vertical margin); use it. Other docs fall back to the font-heading section path."""
+    ch = h.get("chapter")
+    if ch:
+        return ch
+    return " > ".join(h.get("section_path") or []) or "doc"
+
+
 def _passage_blocks(r, hits: list) -> list:
-    """Each hit as a labelled passage block: 'Report — Section, pN:\\n<text>'."""
-    return [f"{r.doc_label(h['doc_id'])} — {' > '.join(h['section_path']) or 'doc'}, {_page(h)}:"
-            f"\n{h['text']}" for h in hits]
+    """Each hit as a labelled passage block: 'Report — Chapter, pN:\\n<text>'."""
+    return [f"{r.doc_label(h['doc_id'])} — {_loc(h)}, {_page(h)}:\n{h['text']}" for h in hits]
 
 
 def _format_context(question: str, r, hits: list) -> str:
@@ -232,29 +243,12 @@ def _claim_key(claim: str) -> str:
 
 
 def _render_claims(claims: list) -> str:
-    """Rebuild an answer from verified claims. Identical statements supported by more than one
-    report are MERGED — stated once with their sources combined — so repeated text (the UDHR, a
-    reproduced law) isn't duplicated. Each cited answer is its OWN paragraph (blank line between),
-    with the segment quote on its own line beneath the fact."""
-    order, groups = [], {}
-    for c in claims:
-        key = _claim_key(c.get("claim", ""))
-        g = groups.get(key)
-        if g is None:
-            g = groups[key] = {"claim": c.get("claim", ""), "sources": [],
-                               "quote": c.get("supporting_quote") or ""}
-            order.append(key)
-        src = c.get("cited_source") or ""
-        if src and src not in g["sources"]:          # merge sources, order-preserving, de-duped
-            g["sources"].append(src)
-        if not g["quote"] and c.get("supporting_quote"):
-            g["quote"] = c["supporting_quote"]
-    blocks = []
-    for key in order:
-        g = groups[key]
-        head = f"{g['claim']} [{'; '.join(g['sources'])}]" if g["sources"] else g["claim"]
-        blocks.append(head + (f'  \n"{g["quote"]}"' if g["quote"] else ""))  # quote on its own line
-    return "\n\n".join(blocks)                        # blank line between cited answers
+    """Render verified claims through the SAME bullet renderer the output parser uses, so verified
+    and unverified answers look identical: one bullet per cited answer, merged duplicate facts,
+    quote on its own line."""
+    units = [{"fact": c.get("claim", ""), "citation": c.get("cited_source", ""),
+              "quote": c.get("supporting_quote", "")} for c in claims]
+    return render_units(units)
 
 
 def _verify(st: dict, question: str, answer: str, passages: list) -> str:
@@ -270,24 +264,69 @@ def _verify(st: dict, question: str, answer: str, passages: list) -> str:
     return _render_claims(grounded)
 
 
+def _trace_hits(hits: list) -> list:
+    return [{"rank": i, "chunk_id": h.get("chunk_id"), "doc": h.get("doc_id"),
+             "chapter": h.get("chapter"), "page": h.get("printed_page") or h.get("page")}
+            for i, h in enumerate(hits[:RAG_K])]
+
+
+def _used_chunk_ids(answer: str, r, hits: list) -> list:
+    """Of the retrieved hits, which the final answer actually CITED — matched by the hit's report
+    label AND its page token appearing in the answer's citations. Lets a trace show which of the
+    retrieved chunks the answer drew on (vs retrieved-but-unused)."""
+    import re
+    a = answer or ""
+    used = []
+    for h in hits:
+        pp = h.get("printed_page")
+        pat = rf"\bp{pp}\b" if pp is not None else rf"PDF p{h.get('page')}\b"
+        if h.get("chunk_id") and r.doc_label(h["doc_id"]) in a and re.search(pat, a):
+            used.append(h["chunk_id"])
+    return used
+
+
+def _trace_usage(resp) -> dict:
+    u = getattr(resp, "usage_metadata", None) or {}
+    return {"input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens")}
+
+
 def rag_answer(question: str, thread_id: str = DEFAULT_THREAD) -> str:
     st = get_state()
     if st["mode"] != "rag":
         return st["agent"].run(question)
     r, model = st["retriever"], st["model"]
-    history = HISTORY.render(thread_id)
-    search_q = _condense(model, history, question)      # standalone query for retrieval
-    hits = r.retrieve(search_q, RAG_K)                   # Phase D shape-dispatch; ONE retrieval
-    if not _answerable(r, hits):                         # deterministic abstain — no answer call
-        return NOT_COVERED
-    passages = _passage_blocks(r, hits)
-    ctx = _format_context(question, r, hits)
-    from langchain_core.messages import HumanMessage
-    answer = model.invoke([HumanMessage(content=_prompt(question, ctx, history))]).content
-    if RAG_VERIFY:
-        answer = _verify(st, question, answer, passages)
-    HISTORY.add(thread_id, question, answer)
-    return answer
+    with tracing.span("rag_answer", thread_id=thread_id, question=question):
+        history = HISTORY.render(thread_id)
+        with tracing.span("condense", has_history=bool(history)):
+            search_q = _condense(model, history, question)   # standalone query for retrieval
+            tracing.set_attrs(condensed_query=search_q)
+        with tracing.span("retrieve", k=RAG_K):
+            hits = r.retrieve(search_q, RAG_K)               # Phase D shape-dispatch; ONE retrieval
+            if tracing.enabled():                            # compute trace attrs only when tracing
+                tracing.set_attrs(n_hits=len(hits), confidence=r.confidence(hits), hits=_trace_hits(hits))
+        answerable = _answerable(r, hits)
+        tracing.set_attrs(abstained=not answerable, min_confidence=RAG_MIN_CONFIDENCE)
+        if not answerable:                                   # deterministic abstain — no answer call
+            return NOT_COVERED
+        passages = _passage_blocks(r, hits)
+        ctx = _format_context(question, r, hits)
+        from langchain_core.messages import HumanMessage
+        with tracing.span("generate"):
+            resp = model.invoke([HumanMessage(content=_prompt(question, ctx, history))])
+            answer = resp.content
+            tracing.set_attrs(**_trace_usage(resp))
+        if RAG_VERIFY:
+            with tracing.span("verify"):
+                answer = _verify(st, question, answer, passages)
+        else:
+            with tracing.span("parse"):
+                answer = _PARSER.parse(answer)
+        if tracing.enabled():                            # which retrieved chunks the answer cited
+            used = _used_chunk_ids(answer, r, hits)
+            tracing.set_attrs(n_used=len(used), used_chunk_ids=used)
+        tracing.set_attrs(answer=answer, answer_len=len(answer))
+        HISTORY.add(thread_id, question, answer)
+        return answer
 
 
 def rag_stream(question: str, thread_id: str = DEFAULT_THREAD):
@@ -299,21 +338,38 @@ def rag_stream(question: str, thread_id: str = DEFAULT_THREAD):
         yield rag_answer(question, thread_id)
         return
     r, model = st["retriever"], st["model"]
-    history = HISTORY.render(thread_id)
-    search_q = _condense(model, history, question)
-    hits = r.retrieve(search_q, RAG_K)
-    if not _answerable(r, hits):
-        yield NOT_COVERED
-        return
-    ctx = _format_context(question, r, hits)
-    from langchain_core.messages import HumanMessage
-    parts = []
-    for chunk in model.stream([HumanMessage(content=_prompt(question, ctx, history))]):
-        text = getattr(chunk, "content", "") or ""
-        if text:
-            parts.append(text)
-            yield text
-    HISTORY.add(thread_id, question, "".join(parts))
+    answer = NOT_COVERED
+    # The whole span tree must CLOSE before we yield: this is a generator, and Starlette resumes it
+    # in a different async context, so a span left open across the yield fails to detach. We buffer
+    # the answer (the bullet parser needs it whole) and yield once, AFTER the span block.
+    with tracing.span("rag_answer", thread_id=thread_id, question=question, streamed=True):
+        history = HISTORY.render(thread_id)
+        with tracing.span("condense", has_history=bool(history)):
+            search_q = _condense(model, history, question)
+            tracing.set_attrs(condensed_query=search_q)
+        with tracing.span("retrieve", k=RAG_K):
+            hits = r.retrieve(search_q, RAG_K)
+            if tracing.enabled():
+                tracing.set_attrs(n_hits=len(hits), confidence=r.confidence(hits), hits=_trace_hits(hits))
+        answerable = _answerable(r, hits)
+        tracing.set_attrs(abstained=not answerable, min_confidence=RAG_MIN_CONFIDENCE)
+        if answerable:
+            ctx = _format_context(question, r, hits)
+            from langchain_core.messages import HumanMessage
+            with tracing.span("generate"):
+                parts = []
+                for chunk in model.stream([HumanMessage(content=_prompt(question, ctx, history))]):
+                    text = getattr(chunk, "content", "") or ""
+                    if text:
+                        parts.append(text)
+            with tracing.span("parse"):
+                answer = _PARSER.parse("".join(parts))
+            if tracing.enabled():                        # which retrieved chunks the answer cited
+                used = _used_chunk_ids(answer, r, hits)
+                tracing.set_attrs(n_used=len(used), used_chunk_ids=used)
+            tracing.set_attrs(answer=answer, answer_len=len(answer))
+            HISTORY.add(thread_id, question, answer)
+    yield answer
 
 
 async def index(request):
