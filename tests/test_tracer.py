@@ -27,7 +27,7 @@ def test_run_traced_reports_trajectory():
     from framework.middleware import resilience
     from framework.tools import get_weather
 
-    agent = Agent("groq:llama-3.3-70b-versatile", tools=[get_weather],
+    agent = Agent("groq:openai/gpt-oss-120b", tools=[get_weather],
                   system_prompt="Use tools to answer.",
                   middleware=resilience())  # retry transient provider errors
     result = agent.run_traced("What is the weather in Lahore?")

@@ -25,7 +25,7 @@ def test_memory_persists_across_turns():
     from framework import Agent
     from framework.memory import checkpoint
 
-    agent = Agent("groq:llama-3.3-70b-versatile", memory=checkpoint("memory"),
+    agent = Agent("groq:openai/gpt-oss-120b", memory=checkpoint("memory"),
                   system_prompt="Answer briefly.")
     agent.run("My favorite number is 42. Remember it.", thread_id="s1")
     out = agent.run("What is my favorite number?", thread_id="s1")

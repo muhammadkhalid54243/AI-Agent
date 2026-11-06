@@ -39,7 +39,7 @@ from framework.middleware import guardrails, resilience
 from framework.tools import get_weather, calculate
 
 agent = Agent(
-    "groq:llama-3.3-70b-versatile",
+    "groq:openai/gpt-oss-120b",
     fallbacks=["openai:gpt-4o-mini"],                       # automatic provider fallback
     tools=[get_weather, calculate],
     memory=checkpoint("memory"),                            # per-session memory (thread_id)
@@ -172,7 +172,7 @@ from framework.middleware import guardrails, ApprovalRequired
 from framework.tools import delete_record
 from framework.memory import checkpoint
 
-agent = Agent("groq:llama-3.3-70b-versatile", tools=[delete_record],
+agent = Agent("groq:openai/gpt-oss-120b", tools=[delete_record],
               memory=checkpoint("memory"),
               middleware=guardrails(require_approval=["delete_record"]))
 try:
@@ -200,7 +200,7 @@ class Ticket(BaseModel):
     summary: str
     priority: str
 
-extract("groq:llama-3.3-70b-versatile", "Login 500s for all users. Urgent.", Ticket)
+extract("groq:openai/gpt-oss-120b", "Login 500s for all users. Urgent.", Ticket)
 # → Ticket(summary='...', priority='high')
 ```
 

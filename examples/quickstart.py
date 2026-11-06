@@ -13,7 +13,7 @@ load_dotenv()
 
 def main():
     agent = Agent(
-        "groq:llama-3.3-70b-versatile",
+        "groq:openai/gpt-oss-120b",
         tools=[get_weather, calculate],
         system_prompt="Use tools to answer. Reply concisely.",
     )

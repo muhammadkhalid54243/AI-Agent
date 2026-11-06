@@ -16,7 +16,7 @@ class Ticket(BaseModel):
 def test_extract_returns_validated_model():
     from framework.structured import extract
     ticket = extract(
-        "groq:llama-3.3-70b-versatile",
+        "groq:openai/gpt-oss-120b",
         "Login returns 500 for all users since this morning. Urgent.",
         Ticket,
         instruction="Turn this into a support ticket.",

@@ -25,7 +25,7 @@ def test_supervisor_delegates_to_specialists():
     from framework.orchestration import subagent, supervisor
     from framework.middleware import resilience
 
-    MODEL = "groq:llama-3.3-70b-versatile"
+    MODEL = "groq:openai/gpt-oss-120b"
     researcher = Agent(MODEL, system_prompt="You list 2-3 concise factual bullet points.")
     writer = Agent(MODEL, system_prompt="You turn bullet points into one clear sentence.")
 

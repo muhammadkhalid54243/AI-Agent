@@ -34,5 +34,5 @@ def score_case(agent, judge_model, case) -> dict:
 
 
 def run_suite(agent, judge_model=None) -> list[dict]:
-    judge_model = judge_model or "groq:llama-3.3-70b-versatile"
+    judge_model = judge_model or "groq:openai/gpt-oss-120b"
     return [score_case(agent, judge_model, c) for c in EVAL_SET]

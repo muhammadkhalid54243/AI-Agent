@@ -39,7 +39,7 @@ def test_run_suite_mostly_passes():
     from framework.tools import get_weather, calculate
     from framework.eval import run_suite
 
-    agent = Agent("groq:llama-3.3-70b-versatile", tools=[get_weather, calculate],
+    agent = Agent("groq:openai/gpt-oss-120b", tools=[get_weather, calculate],
                   system_prompt="Use tools to answer accurately, then reply concisely.",
                   middleware=resilience())
     results = run_suite(agent)

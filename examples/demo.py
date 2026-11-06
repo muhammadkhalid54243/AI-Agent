@@ -16,7 +16,7 @@ from framework.tools import get_weather, calculate, delete_record
 
 load_dotenv()
 
-MODEL = "groq:llama-3.3-70b-versatile"
+MODEL = "groq:openai/gpt-oss-120b"
 
 
 def rule(title):

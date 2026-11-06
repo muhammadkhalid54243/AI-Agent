@@ -8,7 +8,7 @@ load_dotenv()
 @pytest.mark.skipif(not os.environ.get("GROQ_API_KEY"), reason="needs GROQ_API_KEY")
 def test_agent_stream_yields_tokens():
     from framework import Agent
-    agent = Agent("groq:llama-3.3-70b-versatile", system_prompt="Be concise.")
+    agent = Agent("groq:openai/gpt-oss-120b", system_prompt="Be concise.")
     tokens = list(agent.stream("Say hello in four words."))
     assert len(tokens) >= 1
     assert "".join(tokens).strip()

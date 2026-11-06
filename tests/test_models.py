@@ -3,8 +3,8 @@ from framework.core.models import parse_model_spec, resolve_model
 
 
 def test_parse_standard_spec_passes_through():
-    model_id, extra = parse_model_spec("groq:llama-3.3-70b-versatile")
-    assert model_id == "groq:llama-3.3-70b-versatile"
+    model_id, extra = parse_model_spec("groq:openai/gpt-oss-120b")
+    assert model_id == "groq:openai/gpt-oss-120b"
     assert extra == {}
 
 

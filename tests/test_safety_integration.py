@@ -13,7 +13,7 @@ def _agent():
     from framework.middleware import guardrails, resilience
     from framework.tools import delete_record
     return Agent(
-        "groq:llama-3.3-70b-versatile",
+        "groq:openai/gpt-oss-120b",
         tools=[delete_record],
         system_prompt="Use delete_record when asked to delete something.",
         memory=checkpoint("memory"),
