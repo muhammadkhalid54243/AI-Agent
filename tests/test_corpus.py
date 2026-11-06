@@ -110,3 +110,52 @@ def test_retrieve_fact_query_honors_k():
 def test_get_table_returns_verbatim():
     hits = _list_corpus().get_table("D", "City")
     assert hits and "|City|Count|" in hits[0]["text"] and "Karachi|9" in hits[0]["text"]
+
+
+# --- Part 2: entity-aware pre-retrieval filtering ---
+
+def _ch_doc(doc_id: str, year: str, chapter: str) -> ParsedDoc:
+    """A tiny doc whose blocks carry a chapter (meta['chapter']) so chunks inherit it."""
+    blocks = [
+        Block(id=f"{doc_id}:p0:b0", kind="heading", text="Key issues", page=0,
+              section_path=(), meta={"chapter": chapter}),
+        Block(id=f"{doc_id}:p0:b1", kind="paragraph",
+              text=f"In {year} the commission reviewed enforced-disappearance cases in {chapter}.",
+              page=0, section_path=("Key issues",), meta={"chapter": chapter}),
+    ]
+    return ParsedDoc(doc_id=doc_id, source_path=f"{doc_id}.pdf", checksum="c", profile="report",
+                     blocks=blocks, coverage=Coverage(blocks_extracted=len(blocks)),
+                     outline=[OutlineNode(1, "Key issues", 0)], glossary={})
+
+
+def _ch_corpus() -> CorpusRetriever:
+    docs = [_ch_doc("2024_SHR_English", "2024", "Punjab"),
+            _ch_doc("2023_SHR_English", "2023", "Sindh")]
+    return CorpusRetriever(docs, embeddings=DeterministicFakeEmbedding(size=32))
+
+
+def test_allowed_ids_by_chapter_and_year():
+    cr = _ch_corpus()
+    punjab = {c.id for c in cr._chunks if c.chapter == "Punjab"}
+    y2024 = {c.id for c in cr._chunks if "2024" in c.doc_id}
+    assert cr._allowed_ids({"years": set(), "chapters": {"Punjab"}}) == punjab
+    assert cr._allowed_ids({"years": {"2024"}, "chapters": set()}) == y2024
+    assert cr._allowed_ids({"years": set(), "chapters": set()}) is None       # no entity → no filter
+    assert cr._allowed_ids({"years": {"1990"}, "chapters": set()}) == set()    # no such report
+
+
+def test_search_with_allowed_restricts_to_subset():
+    cr = _ch_corpus()
+    allowed = cr._allowed_ids({"years": set(), "chapters": {"Punjab"}})
+    hits = cr._search("enforced disappearance", 5, allowed=allowed)
+    assert hits and all(h["chapter"] == "Punjab" and h["doc_id"] == "2024_SHR_English" for h in hits)
+
+
+def test_help_only_filter_never_zeroes_out():
+    # A bogus entity (no matching report) must still answer from the corpus (help-only skips it).
+    assert _ch_corpus().retrieve("enforced disappearance in 1990", 5)
+
+
+def test_no_entity_searches_the_whole_corpus():
+    hits = _ch_corpus().retrieve("enforced disappearance", 5)
+    assert {h["doc_id"] for h in hits} == {"2024_SHR_English", "2023_SHR_English"}

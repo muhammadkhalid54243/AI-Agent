@@ -117,8 +117,42 @@ class CorpusRetriever:
         self._k = k
         self._candidates = candidates
 
+        # Entity-filter vocabulary (Part 2): chapter names present on the chunks + province/appendix
+        # aliases, so a question's "Punjab" / "KP" / "HRCP stands" can restrict retrieval to that
+        # chapter. Year→doc needs no map (a doc matches a year iff the year is in its doc_id).
+        from framework.ingest.shr import normalize, _PROVINCE_ALIASES
+        self._chapters = {c.chapter for c in chunks if c.chapter}
+        # Exclude year-bearing chapter names (the overview "… in 2024") from the FILTER vocab: they
+        # are low-signal and false-match a question's own country+year phrasing ("death row in
+        # Pakistan in 2024"). They remain real chapters for citations — just not filter keys.
+        alias = {normalize(ch): ch for ch in self._chapters
+                 if normalize(ch) and not re.search(r"\b(?:19|20)\d{2}\b", ch)}
+        for a, canon in _PROVINCE_ALIASES.items():
+            if canon in self._chapters:
+                alias[normalize(a)] = canon
+        if "HRCP stands" in self._chapters:          # natural phrasings of the appendix title
+            for syn in ("hrcp stance", "hrcp position", "hrcp stand"):
+                alias[syn] = "HRCP stands"
+        self._alias_map = alias
+
     def doc_label(self, doc_id: str) -> str:
         return self._labels.get(doc_id, doc_id)
+
+    def _allowed_ids(self, entities: dict):
+        """Chunk ids the question's entities permit — docs matching a year AND chunks matching a
+        chapter. None when there are no entities (no filter). The caller relaxes to unfiltered if
+        the result is empty, so a mis-read entity can never cause a false 'not covered'."""
+        years, chapters = entities.get("years"), entities.get("chapters")
+        if not years and not chapters:
+            return None
+        allowed = set()
+        for c in self._chunks:
+            if years and not any(y in c.doc_id for y in years):
+                continue
+            if chapters and c.chapter not in chapters:
+                continue
+            allowed.add(c.id)
+        return allowed
 
     # --- deterministic abstention gate -------------------------------------
 
@@ -147,8 +181,9 @@ class CorpusRetriever:
         md = MIN_DENSE if min_dense is None else min_dense
         return bool(dense) and max(dense) >= md
 
-    def _search(self, query: str, k: int) -> list:
-        hits = self._index.retrieve(query, self._candidates)
+    def _search(self, query: str, k: int, allowed: set | None = None) -> list:
+        pool = 100 if allowed is None else 400       # widen the pool when filtering a small subset
+        hits = self._index.retrieve(query, self._candidates, candidates=pool, allowed=allowed)
         if self._scorer is not None:
             from framework.rag.rerank import rerank
             return rerank(query, hits, k, scorer=self._scorer)
@@ -197,8 +232,24 @@ class CorpusRetriever:
         two are UNIONED (section-first, deduped). Union — not replace — so a misroute can
         only add noise, never drop the coverage plain search already had. Facts get top-k
         only. One deterministic retrieval, no agent loop."""
-        from framework.rag.router import classify_query
+        from framework.rag.router import classify_query, extract_entities
+        # Entity filter (Part 2) — HELP-ONLY. Try restricting to the doc(s)/chapter(s) the question
+        # names, but keep the filtered view ONLY when it's at least as confident as the unfiltered
+        # search. So a mis-read year, a province that isn't where the answer lives, or a garbage
+        # chapter can never make retrieval worse (measured: a HARD filter regressed SHR 2024 r@5
+        # 0.938→0.812), while a genuinely better-targeted filter (e.g. the HRCP-stands appendix) wins.
         hits = self._search(question, k)
+        allowed = self._allowed_ids(extract_entities(question, self._alias_map))
+        if allowed:
+            fhits = self._search(question, k, allowed=allowed)
+            # STRICTLY more confident, not merely equal: on a tie the filtered top-1 is the SAME
+            # chunk (the filter didn't improve precision), so keeping it can only drop lower-ranked
+            # relevant chunks the unfiltered search had — a pure recall loss. A distractor year
+            # ("…in the previous year, 2023?" on a 2024 question) ties and is correctly left
+            # unfiltered; a genuine win (the HRCP-stands appendix surfacing a higher-scoring chunk)
+            # raises confidence and still takes over.
+            if fhits and (self.confidence(fhits) or -1.0) > (self.confidence(hits) or -1.0):
+                hits = fhits
         shape = classify_query(question)
         if shape == "fact" or not hits:
             return hits

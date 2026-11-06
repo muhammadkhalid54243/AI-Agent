@@ -1,0 +1,62 @@
+# Self-hosted, OPT-IN observability for the HRCP RAG serve process. Nothing here runs unless you
+# start it, and the app emits nothing unless you set the env flags below — the sensitive corpus
+# never leaves your machine. METRICS (Prometheus) + Grafana are stored in ./observability/data/
+# (gitignored), so the DASHBOARD data SURVIVES restarts. Jaeger traces are in-memory (reset on
+# restart) — short-lived debug artifacts, and on-disk Jaeger costs ~2.2 GB on Windows.
+#
+#   # one-time: drop any Jaeger you started by hand, so compose can own ports 4318/16686
+#   docker rm -f jaeger
+#
+#   docker compose -f docker-compose.observability.yml up -d        # start Jaeger + Prometheus + Grafana
+#   # then run the server with tracing AND metrics on:
+#   TRACE_BACKEND=otel OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+#       METRICS_BACKEND=prometheus uv run python serve.py
+#
+#   Jaeger  (per-request traces) : http://localhost:16686
+#   Grafana (metrics dashboard)  : http://localhost:3000  -> "HRCP RAG" dashboard (anonymous admin)
+#   Prometheus (raw queries)     : http://localhost:9090
+#
+#   docker compose -f docker-compose.observability.yml stop         # pause (keeps containers + data)
+#   docker compose -f docker-compose.observability.yml start        # resume
+#   docker compose -f docker-compose.observability.yml down         # remove containers; DATA KEPT
+#   # wipe data: down, then delete ./observability/data/{prometheus,grafana,jaeger}/*
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      # Traces are kept IN MEMORY (reset on restart). On-disk Badger storage was measured to
+      # preallocate ~2.2 GB on Windows regardless of trace count — not worth it for short-lived
+      # debug traces. The dashboard DATA (metrics) persists via Prometheus below.
+    ports:
+      - "16686:16686"        # Jaeger UI
+      - "4318:4318"          # OTLP/HTTP — the app pushes traces here
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d       # local dev; small data
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/data/prometheus:/prometheus
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets Prometheus scrape the app on the host (Linux)
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true        # local dev: no login wall
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./observability/data/grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

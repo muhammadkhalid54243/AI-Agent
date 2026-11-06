@@ -28,6 +28,32 @@ def classify_query(question: str) -> str:
     return "fact"
 
 
+_YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def extract_entities(question: str, alias_map: dict | None = None) -> dict:
+    """Deterministically pull filterable entities from a question (no LLM):
+
+      - `years`:    4-digit years → used to restrict retrieval to the report doc(s) for that year.
+      - `chapters`: canonical chapter names whose alias appears (as a WHOLE phrase) in the question.
+
+    `alias_map` is {normalized-alias → canonical-chapter}, built by the retriever from the corpus's
+    own chapter metadata + province aliases. Matching is whole-word on the normalized question, so
+    'Punjab'/'KP'/'HRCP stands' match but partial words don't. Used by CorpusRetriever to filter
+    retrieval BEFORE searching; a filter only tightens (the retriever relaxes if it finds nothing).
+    """
+    q = question or ""
+    years = set(_YEAR.findall(q))
+    chapters = set()
+    if alias_map:
+        from framework.ingest.shr import normalize
+        nq = normalize(re.sub(r"['’]s?\b", "", q))   # drop possessives: HRCP's -> HRCP
+        for alias, canon in alias_map.items():
+            if alias and re.search(rf"\b{re.escape(alias)}\b", nq):
+                chapters.add(canon)
+    return {"years": years, "chapters": chapters}
+
+
 # Below this many tokens, stuff the whole document; above it, retrieve.
 DEFAULT_THRESHOLD = 50_000
 # Per-profile overrides — reports lean toward stuffing, big structured PDFs toward retrieval.

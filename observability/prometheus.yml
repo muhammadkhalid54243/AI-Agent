@@ -1,0 +1,10 @@
+# Prometheus scrapes the RAG app's metrics endpoint (framework/observability/metrics.py starts it on
+# METRICS_PORT, default 9464, bound to 0.0.0.0). From inside Docker Desktop the host is reachable as
+# host.docker.internal; on Linux the compose file maps it via host-gateway.
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: hrcp-rag
+    static_configs:
+      - targets: ["host.docker.internal:9464"]

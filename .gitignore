@@ -45,6 +45,11 @@ docs/*
 # ─── RAG ingest cache (text exports, indexes, embedding cache) ─────────────
 .rag_cache/
 
+# ─── Observability data (Prometheus TSDB, Grafana DB, Jaeger Badger) ───────
+# Kept in-project so it survives restarts, but never committed. Keep the dir via .gitkeep.
+/observability/data/
+!/observability/data/.gitkeep
+
 # ─── Personal learning-system files (not part of the framework) ──
 CLAUDE.md
 PROGRESS.md

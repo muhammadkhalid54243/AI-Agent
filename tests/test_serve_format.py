@@ -188,7 +188,9 @@ def test_verify_drops_ungrounded_claims(monkeypatch):
         {"claim": "B", "cited_source": "SHR 2024 — s, p2", "supporting_quote": "q2", "grounded": False},
     ]
     monkeypatch.setattr("framework.eval.judge.verify_answer", lambda *a, **k: claims)
-    out = serve_app._verify({"model": None}, "q", "A. B.", ["passage"])
+    # A hit backs (SHR 2024, p1) as chapter "s", so the deterministic correction leaves it intact.
+    hits = [{"doc_id": "2024_SHR_English", "printed_page": 1, "chapter": "s"}]
+    out = serve_app._verify({"model": None}, "q", "A. B.", ["passage"], _FakeRetriever(), hits)
     assert "A [SHR 2024 — s, p1]" in out
     assert "B [" not in out                        # ungrounded claim dropped
 
@@ -210,4 +212,38 @@ def test_verify_abstains_when_nothing_is_grounded(monkeypatch):
     monkeypatch.setattr("framework.eval.judge.verify_answer",
                         lambda *a, **k: [{"claim": "X", "cited_source": "s", "supporting_quote": "q",
                                           "grounded": False}])
-    assert serve_app._verify({"model": None}, "q", "X.", ["p"]) == serve_app.NOT_COVERED
+    assert serve_app._verify({"model": None}, "q", "X.", ["p"], _FakeRetriever(), []) == serve_app.NOT_COVERED
+
+
+# --- Part 3: deterministic citation verifier (the DEFAULT, 0 model calls) ---
+
+def test_verify_citations_corrects_chapter_and_drops_unverified_quote():
+    r = _FakeRetriever()                                 # doc_label: 2024_SHR_English -> "SHR 2024"
+    hits = [{"doc_id": "2024_SHR_English", "printed_page": 18, "chapter": "Balochistan",
+             "text": "Enforced disappearances continued in the province."}]
+    answer = ('- A fact [SHR 2024 — Khyber Pakhtunkhwa, p18]\n'
+              '  "Enforced disappearances continued in the province."\n\n'
+              '- Another fact [SHR 2024 — Balochistan, p18]\n'
+              '  "This sentence appears in no retrieved passage."')
+    out = serve_app._verify_citations(answer, r, hits)
+    assert "Balochistan, p18]" in out and "Khyber Pakhtunkhwa" not in out   # wrong chapter corrected
+    assert "Enforced disappearances continued in the province." in out      # grounded quote kept
+    assert "no retrieved passage" not in out                                # ungrounded quote dropped
+    assert "A fact" in out and "Another fact" in out                        # NO fact ever dropped
+
+
+def test_verify_citations_passes_not_covered_through():
+    assert serve_app._verify_citations(serve_app.NOT_COVERED, _FakeRetriever(), []) == serve_app.NOT_COVERED
+
+
+def test_verify_drops_irrelevant_claims(monkeypatch):
+    claims = [
+        {"claim": "On topic", "cited_source": "SHR 2024 — s, p1", "supporting_quote": "q",
+         "grounded": True, "relevant": True},
+        {"claim": "Off topic", "cited_source": "SHR 2024 — s, p1", "supporting_quote": "q",
+         "grounded": True, "relevant": False},
+    ]
+    monkeypatch.setattr("framework.eval.judge.verify_answer", lambda *a, **k: claims)
+    hits = [{"doc_id": "2024_SHR_English", "printed_page": 1, "chapter": "s"}]
+    out = serve_app._verify({"model": None}, "q", "...", ["p"], _FakeRetriever(), hits)
+    assert "On topic" in out and "Off topic" not in out

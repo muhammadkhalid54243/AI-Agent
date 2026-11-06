@@ -131,6 +131,36 @@ TRACE_BACKEND=otel OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 uv run pyth
 With no `OTEL_EXPORTER_OTLP_ENDPOINT`, spans print to the console instead. Sensitive text payloads
 (question/answer/quote) are redacted unless `TRACE_PAYLOADS=1`. See `.env.example` for all knobs.
 
+**7. (Optional) Metrics dashboard** — Jaeger shows one request; the dashboard shows the aggregate
+over time: LLM calls by stage, tokens, per-stage latency (p50/p95), abstain rate, retrieval
+confidence. Also off by default and fully self-hosted. One compose file runs Jaeger + Prometheus +
+Grafana together:
+
+```bash
+# one-time: if you ever started Jaeger by hand, drop it so compose can own ports 4318/16686
+docker rm -f jaeger
+docker compose -f docker-compose.observability.yml up -d
+TRACE_BACKEND=otel OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+    METRICS_BACKEND=prometheus uv run python serve.py
+# ask a few questions, then open Grafana at http://localhost:3000 -> dashboard "HRCP RAG"
+```
+
+Lifecycle (metrics + Grafana live in `./observability/data/`, gitignored, so the **dashboard
+survives restarts**; Jaeger traces are in-memory and reset on restart):
+
+```bash
+docker compose -f docker-compose.observability.yml stop    # pause (keeps containers + data)
+docker compose -f docker-compose.observability.yml start   # resume
+docker compose -f docker-compose.observability.yml down    # remove containers; DATA KEPT
+# wipe data too: run `down`, then delete ./observability/data/{prometheus,grafana}/*
+```
+
+`METRICS_BACKEND=prometheus` exposes metrics on `METRICS_PORT` (default 9464) for Prometheus to
+scrape (`curl localhost:9464/metrics` to see them raw). Metrics are counts/latency only — no text
+payloads — so they carry no corpus content. Metrics and tracing are independent: enable either or
+both. Prometheus/Jaeger only hold data for the windows when the server was running with these flags
+— a restart shows the saved history, not the gaps when it was off.
+
 ---
 
 ## A few things worth seeing

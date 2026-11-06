@@ -39,13 +39,16 @@ class HybridIndex:
         self._bm25 = BM25Okapi([_tok(c.embed_text) for c in self._leaves])
         self._rrf_k = rrf_k
 
-    def retrieve(self, query: str, k: int, *, candidates: int = 100) -> list:
+    def retrieve(self, query: str, k: int, *, candidates: int = 100, allowed: set | None = None) -> list:
         """Retrieve `candidates` from each channel, RRF-fuse, return the top `k` hits.
 
         Each returned hit also carries its raw channel scores — `dense_score` (cosine, None
         if the chunk was BM25-only and never surfaced densely) and `bm25_score` — so the
         confidence gate upstream has an absolute signal to threshold. RRF itself is rank-only
         and tells you nothing about how good the top hit actually is.
+
+        `allowed`: when given, keep only fused ids in this chunk-id set (the entity filter —
+        restrict to a doc/chapter), applied to the ranked list before taking the top `k`.
         """
         dense_hits = self._dense.retrieve(query, candidates)
         dense_ids = [h["chunk_id"] for h in dense_hits]
@@ -54,7 +57,10 @@ class HybridIndex:
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:candidates]
         bm25_ids = [self._ids[i] for i in ranked]
         bm25_score = {self._ids[i]: float(scores[i]) for i in ranked}
-        fused = reciprocal_rank_fusion([dense_ids, bm25_ids], self._rrf_k)[:k]
+        fused = reciprocal_rank_fusion([dense_ids, bm25_ids], self._rrf_k)
+        if allowed is not None:
+            fused = [i for i in fused if i in allowed]
+        fused = fused[:k]
         out = []
         for cid in fused:
             h = self._hit(cid)

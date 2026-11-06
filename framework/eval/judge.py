@@ -36,6 +36,7 @@ class _Claim(BaseModel):
     cited_source: str           # the source it cited, e.g. "SHR 2024 — Key issues, p18"
     supporting_quote: str       # the verbatim sentence from the passages that supports it
     entailed: bool              # does that quote actually support the claim?
+    relevant: bool = True       # does the claim actually answer the QUESTION? (off-topic -> drop)
 
 
 class _Verdict(BaseModel):
@@ -60,9 +61,10 @@ def quote_grounded(quote: str, passages, *, min_len: int = 12) -> bool:
 VERIFY_INSTRUCTION = (
     "You are auditing an answer's citations against the SOURCE PASSAGES. For EACH distinct "
     "factual statement in the answer, return: the claim, the source it cited, the EXACT "
-    "sentence from the passages that supports it (copied verbatim — not paraphrased), and "
-    "whether that sentence genuinely entails the claim. If no passage supports a claim, set "
-    "entailed=false and give the closest quote (or empty).")
+    "sentence from the passages that supports it (copied verbatim — not paraphrased), whether "
+    "that sentence genuinely entails the claim, and whether the claim actually answers the "
+    "QUESTION (relevant). If no passage supports a claim, set entailed=false and give the closest "
+    "quote (or empty). If the claim is off-topic for the question, set relevant=false.")
 
 
 def verify_answer(model, question: str, answer: str, passages: list) -> list:
@@ -83,5 +85,6 @@ def verify_answer(model, question: str, answer: str, passages: list) -> list:
         grounded = bool(c.entailed) and quote_grounded(c.supporting_quote, passages)
         out.append({"claim": c.claim, "cited_source": c.cited_source,
                     "supporting_quote": c.supporting_quote,
-                    "entailed": bool(c.entailed), "grounded": grounded})
+                    "entailed": bool(c.entailed), "relevant": bool(c.relevant),
+                    "grounded": grounded})
     return out

@@ -21,6 +21,7 @@ RAG_RERANK=1 to enable the cross-encoder reranker (better ranking, slower/heavie
 """
 
 import os
+import time
 
 from dotenv import load_dotenv
 from starlette.applications import Starlette
@@ -31,10 +32,10 @@ from framework import Agent
 from framework.memory import checkpoint
 from framework.middleware import resilience, ApprovalRequired
 from framework.middleware.guardrails import guardrails
-from framework.observability import tracing
+from framework.observability import metrics, tracing
 from framework.rag.corpus import MIN_DENSE as _MIN_DENSE, MIN_RERANK as _MIN_RERANK
 from framework.serve.history import History
-from framework.structured.answer_parser import CitedAnswerParser, render_units
+from framework.structured.answer_parser import parse_units, render_units
 from framework.tools import get_weather, calculate
 from framework.serve.ui import INDEX_HTML
 
@@ -93,7 +94,6 @@ RAG_SYS = (
 
 _state = None
 HISTORY = History()
-_PARSER = CitedAnswerParser()     # formats every answer into the bullet-list shape, deterministically
 
 
 def _resolve_doc_paths() -> list:
@@ -251,17 +251,49 @@ def _render_claims(claims: list) -> str:
     return render_units(units)
 
 
-def _verify(st: dict, question: str, answer: str, passages: list) -> str:
-    """Drop any fact whose citation isn't grounded in its passage; abstain if none survive."""
+def _authmap(r, hits: list) -> dict:
+    """{(report_label, page_token): authoritative chapter} from the retrieved passages — the valid
+    source lines the deterministic citation check holds every citation to. `_loc` derives the
+    chapter from Part 1's TOC metadata, so this is the authority for 'what chapter is this page'."""
+    return {(r.doc_label(h["doc_id"]), _page(h)): _loc(h) for h in hits}
+
+
+def _verify_citations(answer: str, r, hits: list) -> str:
+    """Deterministic citation check — the DEFAULT, zero model calls. Correct each citation's
+    chapter against the passage it points to (or strip one no passage backs), and drop any quote
+    that isn't verbatim in the passages. Degrade/correct ONLY — never drops a fact, so it can't
+    regress coverage. Replaces the bare output parser on the served path, so every answer gets the
+    same bullet shape AND a checked citation."""
+    from framework.eval.cite_check import correct_citation
+    from framework.eval.judge import quote_grounded
+    units = parse_units(answer or "")
+    if not units:
+        return answer or ""                      # NOT_COVERED / unparseable -> passed through
+    authmap = _authmap(r, hits)
+    passages = _passage_blocks(r, hits)
+    for u in units:
+        u["citation"] = correct_citation(u.get("citation", ""), authmap)
+        if u.get("quote") and not quote_grounded(u["quote"], passages):
+            u["quote"] = ""                      # unverified quote removed; fact + page citation stay
+    return render_units(units)
+
+
+def _verify(st: dict, question: str, answer: str, passages: list, r, hits: list) -> str:
+    """Model path (RAG_VERIFY=1): drop any fact the judge finds ungrounded or off-question, then
+    apply the SAME deterministic citation correction to the survivors. Abstain if none survive."""
+    from framework.eval.cite_check import correct_citation
     from framework.eval.judge import verify_answer
     try:
         claims = verify_answer(st["model"], question, answer, passages)
     except Exception:
         return answer                            # verification failure must not drop a good answer
-    grounded = [c for c in claims if c.get("grounded")]
-    if not grounded:
+    kept = [c for c in claims if c.get("grounded") and c.get("relevant", True)]
+    if not kept:
         return NOT_COVERED
-    return _render_claims(grounded)
+    authmap = _authmap(r, hits)
+    for c in kept:
+        c["cited_source"] = correct_citation(c.get("cited_source", ""), authmap)
+    return _render_claims(kept)
 
 
 def _trace_hits(hits: list) -> list:
@@ -295,36 +327,51 @@ def rag_answer(question: str, thread_id: str = DEFAULT_THREAD) -> str:
     if st["mode"] != "rag":
         return st["agent"].run(question)
     r, model = st["retriever"], st["model"]
+    t0 = time.perf_counter()
     with tracing.span("rag_answer", thread_id=thread_id, question=question):
         history = HISTORY.render(thread_id)
         with tracing.span("condense", has_history=bool(history)):
+            tc = time.perf_counter()
             search_q = _condense(model, history, question)   # standalone query for retrieval
             tracing.set_attrs(condensed_query=search_q)
+            if history:                                       # a model call happened only with history
+                metrics.llm_call("condense"); metrics.latency("condense", time.perf_counter() - tc)
         with tracing.span("retrieve", k=RAG_K):
+            tr0 = time.perf_counter()
             hits = r.retrieve(search_q, RAG_K)               # Phase D shape-dispatch; ONE retrieval
+            metrics.latency("retrieve", time.perf_counter() - tr0)
+            conf = r.confidence(hits) if (tracing.enabled() or metrics.enabled()) else None
+            metrics.confidence(conf)
             if tracing.enabled():                            # compute trace attrs only when tracing
-                tracing.set_attrs(n_hits=len(hits), confidence=r.confidence(hits), hits=_trace_hits(hits))
+                tracing.set_attrs(n_hits=len(hits), confidence=conf, hits=_trace_hits(hits))
         answerable = _answerable(r, hits)
         tracing.set_attrs(abstained=not answerable, min_confidence=RAG_MIN_CONFIDENCE)
+        metrics.request(abstained=not answerable)
         if not answerable:                                   # deterministic abstain — no answer call
             return NOT_COVERED
         passages = _passage_blocks(r, hits)
         ctx = _format_context(question, r, hits)
         from langchain_core.messages import HumanMessage
         with tracing.span("generate"):
+            tg = time.perf_counter()
             resp = model.invoke([HumanMessage(content=_prompt(question, ctx, history))])
             answer = resp.content
-            tracing.set_attrs(**_trace_usage(resp))
+            usage = _trace_usage(resp)
+            tracing.set_attrs(**usage)
+            metrics.llm_call("generate", usage.get("input_tokens"), usage.get("output_tokens"))
+            metrics.latency("generate", time.perf_counter() - tg)
         if RAG_VERIFY:
             with tracing.span("verify"):
-                answer = _verify(st, question, answer, passages)
+                metrics.llm_call("verify")                   # opt-in judge is one more model call
+                answer = _verify(st, question, answer, passages, r, hits)
         else:
-            with tracing.span("parse"):
-                answer = _PARSER.parse(answer)
+            with tracing.span("verify_citations"):       # deterministic default: 0 model calls
+                answer = _verify_citations(answer, r, hits)
         if tracing.enabled():                            # which retrieved chunks the answer cited
             used = _used_chunk_ids(answer, r, hits)
             tracing.set_attrs(n_used=len(used), used_chunk_ids=used)
         tracing.set_attrs(answer=answer, answer_len=len(answer))
+        metrics.latency("rag_answer", time.perf_counter() - t0)
         HISTORY.add(thread_id, question, answer)
         return answer
 
@@ -339,36 +386,48 @@ def rag_stream(question: str, thread_id: str = DEFAULT_THREAD):
         return
     r, model = st["retriever"], st["model"]
     answer = NOT_COVERED
+    t0 = time.perf_counter()
     # The whole span tree must CLOSE before we yield: this is a generator, and Starlette resumes it
     # in a different async context, so a span left open across the yield fails to detach. We buffer
     # the answer (the bullet parser needs it whole) and yield once, AFTER the span block.
     with tracing.span("rag_answer", thread_id=thread_id, question=question, streamed=True):
         history = HISTORY.render(thread_id)
         with tracing.span("condense", has_history=bool(history)):
+            tc = time.perf_counter()
             search_q = _condense(model, history, question)
             tracing.set_attrs(condensed_query=search_q)
+            if history:
+                metrics.llm_call("condense"); metrics.latency("condense", time.perf_counter() - tc)
         with tracing.span("retrieve", k=RAG_K):
+            tr0 = time.perf_counter()
             hits = r.retrieve(search_q, RAG_K)
+            metrics.latency("retrieve", time.perf_counter() - tr0)
+            conf = r.confidence(hits) if (tracing.enabled() or metrics.enabled()) else None
+            metrics.confidence(conf)
             if tracing.enabled():
-                tracing.set_attrs(n_hits=len(hits), confidence=r.confidence(hits), hits=_trace_hits(hits))
+                tracing.set_attrs(n_hits=len(hits), confidence=conf, hits=_trace_hits(hits))
         answerable = _answerable(r, hits)
         tracing.set_attrs(abstained=not answerable, min_confidence=RAG_MIN_CONFIDENCE)
+        metrics.request(abstained=not answerable)
         if answerable:
             ctx = _format_context(question, r, hits)
             from langchain_core.messages import HumanMessage
             with tracing.span("generate"):
+                tg = time.perf_counter()
                 parts = []
                 for chunk in model.stream([HumanMessage(content=_prompt(question, ctx, history))]):
                     text = getattr(chunk, "content", "") or ""
                     if text:
                         parts.append(text)
-            with tracing.span("parse"):
-                answer = _PARSER.parse("".join(parts))
+                metrics.llm_call("generate"); metrics.latency("generate", time.perf_counter() - tg)
+            with tracing.span("verify_citations"):       # deterministic default: 0 model calls
+                answer = _verify_citations("".join(parts), r, hits)
             if tracing.enabled():                        # which retrieved chunks the answer cited
                 used = _used_chunk_ids(answer, r, hits)
                 tracing.set_attrs(n_used=len(used), used_chunk_ids=used)
             tracing.set_attrs(answer=answer, answer_len=len(answer))
             HISTORY.add(thread_id, question, answer)
+        metrics.latency("rag_answer", time.perf_counter() - t0)
     yield answer
 
 
